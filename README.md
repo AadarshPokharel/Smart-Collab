@@ -1,6 +1,6 @@
 # SmartCollab - Student Team Collaboration Platform
 
-**Version:** 1.0.0 (Sprint 3)  
+**Version:** 1.0.0  
 **Status:** In Development  
 **Team:** Aadarsh Pokharel, Subash Gyawali, Nisshreet Bhattarai, Anubhav Pokhrel, Swastik Paudel, Naba Raj Khatri
 
@@ -91,4 +91,4 @@ Smart-Collab/
 ### DevOps
 - **Development:** Nodemon for auto-reload
 - **Testing:** Jest
-- **Deployment:** (To be configured in later sprints)
+- **Deployment:** (To be configured)
