@@ -8,6 +8,7 @@ import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
 import ProjectsPage from './pages/ProjectsPage';
 import ProjectPage from './pages/ProjectPage';
+import FeaturePlaceholderPage from './pages/FeaturePlaceholderPage';
 import './styles/App.css';
 
 function AppRoutes() {
@@ -48,6 +49,39 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <ProjectPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/tasks"
+        element={
+          <ProtectedRoute>
+            <FeaturePlaceholderPage
+              title="Tasks"
+              description="Manage assigned work, due dates, and status updates from a dedicated task workspace."
+            />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/messages"
+        element={
+          <ProtectedRoute>
+            <FeaturePlaceholderPage
+              title="Messages"
+              description="Team conversations, mentions, and message threads will live here when the messaging workspace is added."
+            />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <ProtectedRoute>
+            <FeaturePlaceholderPage
+              title="Settings"
+              description="Profile settings, workspace preferences, and notification controls can be managed from this area."
+            />
           </ProtectedRoute>
         }
       />

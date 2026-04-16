@@ -1,5 +1,7 @@
 const Project = require('../models/Project');
 const Task = require('../models/Task');
+const User = require('../models/User');
+const { createNotification } = require('../services/notificationService');
 
 /**
  * Create new project
@@ -57,6 +59,17 @@ exports.createProject = async (req, res) => {
       path: 'members.user',
       select: 'firstName lastName email avatar',
     });
+
+    if (project.owner.toString() !== req.user._id.toString()) {
+      await createNotification({
+        user: project.owner,
+        type: 'Info',
+        title: 'Project created',
+        message: `Project “${project.title}” was created.`,
+        entityType: 'Project',
+        entityId: project._id,
+      });
+    }
 
     res.status(201).json({
       success: true,
@@ -266,7 +279,7 @@ exports.deleteProject = async (req, res) => {
  */
 exports.inviteMember = async (req, res) => {
   try {
-    const { userId, role = 'Member' } = req.body;
+    const { userId, email, role = 'Member' } = req.body;
 
     const project = await Project.findById(req.params.id);
 
@@ -285,9 +298,25 @@ exports.inviteMember = async (req, res) => {
       });
     }
 
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    let invitedUser = null;
+
+    if (userId) {
+      invitedUser = await User.findById(userId).select('firstName lastName email');
+    } else if (normalizedEmail) {
+      invitedUser = await User.findOne({ email: normalizedEmail }).select('firstName lastName email');
+    }
+
+    if (!invitedUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
     // Check if already member
     const isMember = project.members.some(
-      (m) => m.user.toString() === userId.toString()
+      (m) => m.user.toString() === invitedUser._id.toString()
     );
     if (isMember) {
       return res.status(400).json({
@@ -297,7 +326,7 @@ exports.inviteMember = async (req, res) => {
     }
 
     project.members.push({
-      user: userId,
+      user: invitedUser._id,
       role,
     });
     await project.save();
@@ -305,6 +334,16 @@ exports.inviteMember = async (req, res) => {
     await project.populate({
       path: 'members.user',
       select: 'firstName lastName email avatar',
+    });
+
+    await createNotification({
+      user: invitedUser._id,
+      type: 'ProjectInvite',
+      title: 'Project invitation',
+      message: `You were invited to “${project.title}”.`,
+      entityType: 'Project',
+      entityId: project._id,
+      metadata: { projectId: project._id.toString(), role },
     });
 
     res.status(200).json({
@@ -355,6 +394,15 @@ exports.removeMember = async (req, res) => {
     await project.populate({
       path: 'members.user',
       select: 'firstName lastName email avatar',
+    });
+
+    await createNotification({
+      user: memberId,
+      type: 'Info',
+      title: 'Removed from project',
+      message: `You were removed from “${project.title}”.`,
+      entityType: 'Project',
+      entityId: project._id,
     });
 
     res.status(200).json({

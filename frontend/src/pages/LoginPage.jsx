@@ -7,6 +7,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
@@ -19,7 +20,7 @@ export default function LoginPage() {
 
     try {
       console.log('Attempting login with:', email);
-      const result = await login(email, password);
+      const result = await login(email, password, rememberMe);
       console.log('Login result:', result);
 
       if (result.success) {
@@ -102,7 +103,12 @@ export default function LoginPage() {
 
             <div className="form-options">
               <label className="remember-checkbox">
-                <input type="checkbox" />
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  disabled={loading}
+                />
                 <span>Remember me</span>
               </label>
               <button type="button" className="forgot-link">Forgot password?</button>

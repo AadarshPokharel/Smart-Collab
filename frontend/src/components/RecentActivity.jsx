@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import api from '../services/api';
 import '../styles/RecentActivity.css';
 
 const RecentActivity = () => {
@@ -13,43 +13,11 @@ const RecentActivity = () => {
   const fetchActivities = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
-      
-      // Fetch tasks to use as activity
-      const tasksResponse = await axios.get('http://localhost:5001/api/tasks', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      
-      // Fetch projects to use as activity
-      const projectsResponse = await axios.get('http://localhost:5001/api/projects', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
-      // Create mock activities (in a real app, you'd have an activity log endpoint)
-      const mockActivities = [
-        ...tasksResponse.data.slice(0, 3).map(task => ({
-          id: `task-${task._id}`,
-          type: 'task',
-          action: `Created task: ${task.title}`,
-          timestamp: new Date(task.createdAt || Date.now()),
-          icon: '✓'
-        })),
-        ...projectsResponse.data.slice(0, 2).map(project => ({
-          id: `project-${project._id}`,
-          type: 'project',
-          action: `Started project: ${project.name}`,
-          timestamp: new Date(project.createdAt || Date.now()),
-          icon: '▢'
-        }))
-      ];
-
-      setActivities(
-        mockActivities
-          .sort((a, b) => b.timestamp - a.timestamp)
-          .slice(0, 8)
-      );
+      const { data } = await api.get('/activity');
+      setActivities(Array.isArray(data?.activity) ? data.activity : []);
     } catch (error) {
       console.error('Error fetching activities:', error);
+      setActivities([]);
     } finally {
       setLoading(false);
     }
@@ -89,11 +57,11 @@ const RecentActivity = () => {
           activities.map(activity => (
             <div key={activity.id} className={`activity-item ${activity.type}`}>
               <div className="activity-icon">
-                {activity.icon}
+                {activity.icon || '•'}
               </div>
               <div className="activity-content">
-                <p className="activity-action">{activity.action}</p>
-                <p className="activity-time">{formatTime(activity.timestamp)}</p>
+                <p className="activity-action">{activity.text || activity.action}</p>
+                <p className="activity-time">{activity.time || formatTime(activity.timestamp)}</p>
               </div>
             </div>
           ))

@@ -4,7 +4,9 @@ import { Bell, ChevronDown, LogOut, Settings } from 'lucide-react';
 import { projectService, taskService } from '../services';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
-import { getMockNotifications, normalizeNotifications } from '../utils/notifications';
+import NotificationDropdown from '../components/NotificationDropdown';
+import { normalizeNotifications } from '../utils/notifications';
+import { toast } from 'react-hot-toast';
 import '../styles/ProjectBoard.css';
 
 export default function ProjectPage() {
@@ -20,6 +22,8 @@ export default function ProjectPage() {
   const notificationRef = useRef(null);
   const [notifications, setNotifications] = useState([]);
   const [showTaskForm, setShowTaskForm] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteLoading, setInviteLoading] = useState(false);
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -63,11 +67,63 @@ export default function ProjectPage() {
         const { data } = await api.get('/notifications');
         setNotifications(normalizeNotifications(data));
       } catch {
-        setNotifications(getMockNotifications());
+        setNotifications([]);
       }
     };
     load();
   }, []);
+
+  const reloadNotifications = async () => {
+    const { data } = await api.get('/notifications');
+    setNotifications(normalizeNotifications(data));
+  };
+
+  const handleMarkNotificationRead = async (notification) => {
+    const notificationId = notification?.id || notification?._id;
+    if (!notificationId || notification?.read) return;
+
+    setNotifications((prev) => prev.map((item) => (item.id === notificationId || item._id === notificationId ? { ...item, read: true } : item)));
+    try {
+      await api.patch(`/notifications/${notificationId}/read`);
+    } catch (error) {
+      console.error('Failed to mark notification read:', error);
+      reloadNotifications().catch(() => {});
+    }
+  };
+
+  const handleMarkAllNotificationsRead = async () => {
+    setNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
+    try {
+      await api.patch('/notifications/read-all');
+    } catch (error) {
+      console.error('Failed to mark all notifications read:', error);
+      reloadNotifications().catch(() => {});
+    }
+  };
+
+  const handleDeleteNotification = async (notification, event) => {
+    event?.stopPropagation();
+    const notificationId = notification?.id || notification?._id;
+    if (!notificationId) return;
+
+    setNotifications((prev) => prev.filter((item) => (item.id || item._id) !== notificationId));
+    try {
+      await api.delete(`/notifications/${notificationId}`);
+    } catch (error) {
+      console.error('Failed to delete notification:', error);
+      reloadNotifications().catch(() => {});
+    }
+  };
+
+  const handleClearAllNotifications = async () => {
+    setNotifications([]);
+    try {
+      await api.delete('/notifications/clear-all');
+    } catch (error) {
+      console.error('Failed to clear notifications:', error);
+      reloadNotifications().catch(() => {});
+    }
+  };
 
   const fetchProjectData = async () => {
     try {
@@ -127,6 +183,28 @@ export default function ProjectPage() {
       } catch (error) {
         console.error('Error deleting task:', error);
       }
+    }
+  };
+
+  const handleInviteMember = async (e) => {
+    e.preventDefault();
+    const email = inviteEmail.trim();
+    if (!email) {
+      toast.error('Enter an email address');
+      return;
+    }
+
+    try {
+      setInviteLoading(true);
+      await projectService.inviteMember(id, { email });
+      toast.success('Invitation sent');
+      setInviteEmail('');
+      fetchProjectData();
+    } catch (error) {
+      const message = error?.response?.data?.message || error?.response?.data?.error || 'Failed to invite member';
+      toast.error(message);
+    } finally {
+      setInviteLoading(false);
     }
   };
 
@@ -192,53 +270,14 @@ export default function ProjectPage() {
               </button>
 
               {showNotifications && (
-                <div className="absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded-xl shadow-xl p-4 z-30">
-                  <div className="flex items-center justify-between mb-3">
-                    <p className="text-sm font-semibold">Notifications</p>
-                    <button
-                      className="text-xs text-violet-600 hover:text-violet-700"
-                      onClick={() =>
-                        setNotifications((prev) => prev.map((note) => ({ ...note, read: true })))
-                      }
-                    >
-                      Mark all read
-                    </button>
-                  </div>
-                  <div className="space-y-3 max-h-80 overflow-auto">
-                    {notifications.length === 0 ? (
-                      <div className="text-center text-sm text-slate-500 py-6">No new notifications</div>
-                    ) : (
-                      notifications.map((note, index) => {
-                        const isRead = !!note?.read;
-                        const text = note?.text || note?.message || note?.title || 'Notification';
-                        const time =
-                          note?.time ||
-                          (note?.createdAt
-                            ? new Date(note.createdAt).toLocaleString()
-                            : note?.timestamp
-                              ? new Date(note.timestamp).toLocaleString()
-                              : '');
-
-                        return (
-                          <div
-                            key={note?.id || note?._id || index}
-                            className={`p-3 rounded-lg border text-sm ${
-                              isRead
-                                ? 'border-slate-200 bg-slate-50'
-                                : 'border-violet-200 bg-violet-50'
-                            }`}
-                          >
-                            <div className="flex items-start justify-between">
-                              <p className="text-slate-700 font-medium">{text}</p>
-                              {!isRead && <span className="w-2 h-2 bg-violet-500 rounded-full mt-1" />}
-                            </div>
-                            {time && <p className="text-xs text-slate-500 mt-2">{time}</p>}
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
+                <NotificationDropdown
+                  notifications={notifications}
+                  onMarkAllRead={handleMarkAllNotificationsRead}
+                  onClearAll={handleClearAllNotifications}
+                  onMarkRead={handleMarkNotificationRead}
+                  onDelete={handleDeleteNotification}
+                  panelClassName="absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded-xl shadow-xl p-4 z-30"
+                />
               )}
             </div>
 
@@ -467,6 +506,19 @@ export default function ProjectPage() {
         {activeTab === 'members' && (
           <div className="members-section">
             <h2>Project Members</h2>
+            {projectOwnerId && user?._id?.toString() === projectOwnerId.toString() && (
+              <form className="task-form" onSubmit={handleInviteMember} style={{ marginBottom: '1rem' }}>
+                <input
+                  type="email"
+                  placeholder="Invite teammate by email"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                />
+                <button type="submit" className="btn btn-primary" disabled={inviteLoading}>
+                  {inviteLoading ? 'Inviting…' : 'Invite Member'}
+                </button>
+              </form>
+            )}
             <div className="members-list">
               {projectMembers.length > 0 ? (
                 projectMembers.map((member, idx) => {

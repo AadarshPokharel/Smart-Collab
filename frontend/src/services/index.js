@@ -21,8 +21,8 @@ export const authService = {
 };
 
 export const projectService = {
-  createProject: (name, description) =>
-    api.post('/projects', { name, description }),
+  createProject: (title, description) =>
+    api.post('/projects', { title, description }),
 
   getProjects: () =>
     api.get('/projects'),
@@ -35,6 +35,9 @@ export const projectService = {
 
   deleteProject: (id) =>
     api.delete(`/projects/${id}`),
+
+  inviteMember: (projectId, memberData) =>
+    api.post(`/projects/${projectId}/invite`, memberData),
 
   addMember: (projectId, userId) =>
     api.post(`/projects/${projectId}/members`, { userId }),

@@ -3,6 +3,13 @@ const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
 const mongoose = require('mongoose');
+const { authMiddleware } = require('./middleware/auth');
+const {
+  getDashboardData,
+  getDashboardStats,
+  getDashboardActivity,
+  getDashboardNotifications,
+} = require('./controllers/dashboardController');
 
 const app = express();
 
@@ -36,6 +43,11 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/smartcoll
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/projects', require('./routes/projects'));
 app.use('/api/tasks', require('./routes/tasks'));
+app.use('/api/notifications', require('./routes/notifications'));
+
+app.get('/api/dashboard', authMiddleware, getDashboardData);
+app.get('/api/dashboard/stats', authMiddleware, getDashboardStats);
+app.get('/api/activity', authMiddleware, getDashboardActivity);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -57,7 +69,7 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong!' });
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {
   console.log(`SmartCollab backend running on port ${PORT}`);
 });

@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Bell, BellOff, Check, CheckSquare, Clock, MessageSquare, UserPlus, Loader2 } from 'lucide-react';
-import axios from 'axios';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
+import api from '../services/api';
 
 const NotificationsPanel = () => {
   const { user } = useAuth();
@@ -17,10 +17,11 @@ const NotificationsPanel = () => {
   const fetchNotifications = async () => {
     try {
       setLoading(true);
-      const { data } = await axios.get('/api/notifications');
-      setNotifications(data || []);
+      const { data } = await api.get('/notifications');
+      setNotifications(Array.isArray(data?.notifications) ? data.notifications : []);
     } catch (error) {
       console.error('Failed to fetch notifications:', error);
+      setNotifications([]);
       toast.error('Failed to load notifications');
     } finally {
       setLoading(false);
@@ -30,8 +31,8 @@ const NotificationsPanel = () => {
   const handleMarkAllRead = async () => {
     try {
       setMarkingAll(true);
-      await axios.put('/api/notifications/read-all');
-      setNotifications(notifications.map(n => ({ ...n, read: true })));
+      setNotifications((prev) => prev.map((note) => ({ ...note, read: true })));
+      await api.patch('/notifications/read-all');
       toast.success('All notifications marked as read');
     } catch (error) {
       console.error('Failed to mark all as read:', error);
@@ -43,13 +44,35 @@ const NotificationsPanel = () => {
 
   const handleMarkOneRead = async (notificationId) => {
     try {
-      await axios.put(`/api/notifications/${notificationId}/read`);
-      setNotifications(notifications.map(n =>
-        n._id === notificationId ? { ...n, read: true } : n
-      ));
+      const target = notifications.find((item) => (item.id || item._id) === notificationId);
+      if (target) {
+        setNotifications((prev) => prev.map((note) => ((note.id || note._id) === notificationId ? { ...note, read: true } : note)));
+        await api.patch(`/notifications/${notificationId}/read`);
+      }
     } catch (error) {
       console.error('Failed to mark notification as read:', error);
       toast.error('Failed to update notification');
+    }
+  };
+
+  const handleDeleteNotification = async (notificationId) => {
+    try {
+      setNotifications((prev) => prev.filter((note) => (note.id || note._id) !== notificationId));
+      await api.delete(`/notifications/${notificationId}`);
+    } catch (error) {
+      console.error('Failed to delete notification:', error);
+      toast.error('Failed to delete notification');
+    }
+  };
+
+  const handleClearAll = async () => {
+    try {
+      setNotifications([]);
+      await api.delete('/notifications/clear-all');
+      toast.success('All notifications cleared');
+    } catch (error) {
+      console.error('Failed to clear notifications:', error);
+      toast.error('Failed to clear notifications');
     }
   };
 
@@ -128,25 +151,39 @@ const NotificationsPanel = () => {
           <IconComponent size={20} className={colorMap[color]} />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-900 truncate">
-            {notification.title}
-          </p>
-          <p className="text-sm text-gray-600 line-clamp-2 mt-1">
-            {notification.message}
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-gray-900 truncate">
+                {notification.title || notification.text}
+              </p>
+              <p className="text-sm text-gray-600 line-clamp-2 mt-1">
+                {notification.message || notification.text}
+              </p>
+            </div>
+            {!notification.read && <span className="w-2 h-2 bg-violet-500 rounded-full mt-2 transition-all duration-200" />}
+          </div>
           <p className="text-xs text-gray-500 mt-2">
-            {formatTimeAgo(notification.timestamp)}
+            {notification.timestamp ? formatTimeAgo(notification.timestamp) : (notification.time || '')}
           </p>
         </div>
-        {!notification.read && (
+        <div className="flex-shrink-0 flex items-center gap-1">
+          {!notification.read && (
+            <button
+              onClick={() => handleMarkOneRead(notification.id || notification._id)}
+              className="flex-shrink-0 p-2 text-violet-600 hover:bg-violet-100 rounded-md transition-colors"
+              title="Mark as read"
+            >
+              <Check size={18} />
+            </button>
+          )}
           <button
-            onClick={() => handleMarkOneRead(notification._id)}
-            className="flex-shrink-0 p-2 text-violet-600 hover:bg-violet-100 rounded-md transition-colors"
-            title="Mark as read"
+            onClick={() => handleDeleteNotification(notification.id || notification._id)}
+            className="flex-shrink-0 p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
+            title="Delete notification"
           >
-            <Check size={18} />
+            ×
           </button>
-        )}
+        </div>
       </div>
     );
   };
@@ -170,9 +207,15 @@ const NotificationsPanel = () => {
             disabled={markingAll}
             className="px-3 py-1 text-sm font-medium text-violet-600 hover:bg-violet-50 rounded transition-colors disabled:opacity-50 flex items-center gap-2"
           >
-            {markingAll ? <Loader2 size={16} className="animate-spin" /> : 'Mark all read'}
+            {markingAll ? <Loader2 size={16} className="animate-spin" /> : 'Mark all as read'}
           </button>
         )}
+        <button
+          onClick={handleClearAll}
+          className="ml-2 px-3 py-1 text-sm font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-50 rounded transition-colors"
+        >
+          Clear all
+        </button>
       </div>
 
       {/* Content */}
@@ -202,7 +245,7 @@ const NotificationsPanel = () => {
           <div className="divide-y divide-gray-100 p-4 space-y-2">
             {notifications.map(notification => (
               <NotificationItem
-                key={notification._id}
+                key={notification.id || notification._id}
                 notification={notification}
               />
             ))}

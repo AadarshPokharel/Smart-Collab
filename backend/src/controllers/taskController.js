@@ -1,5 +1,6 @@
 const Task = require('../models/Task');
 const Project = require('../models/Project');
+const { createNotification } = require('../services/notificationService');
 
 const isProjectMember = (project, userId) => {
   if (!project || !userId) return false;
@@ -13,6 +14,12 @@ const isProjectMember = (project, userId) => {
     const memberId = m?.user?._id || m?.user;
     return memberId && memberId.toString() === userIdStr;
   });
+};
+
+const populateTaskRelations = async (task) => {
+  await task.populate('project', 'title');
+  await task.populate('assignedTo', 'firstName lastName email');
+  await task.populate('assignedBy', 'firstName lastName email');
 };
 
 // Create new task
@@ -75,9 +82,18 @@ exports.createTask = async (req, res) => {
       dueTimezone: typeof dueTimezone === 'string' && dueTimezone.trim() ? dueTimezone.trim() : null,
     });
 
-    await task.populate('assignedBy', 'firstName lastName email');
-    if (assignedTo) {
-      await task.populate('assignedTo', 'firstName lastName email');
+    await populateTaskRelations(task);
+
+    if (assignedTo && assignedTo.toString() !== req.user._id.toString()) {
+      await createNotification({
+        user: assignedTo,
+        type: 'TaskAssigned',
+        title: 'Task assigned',
+        message: `You were assigned “${task.title}”.`,
+        entityType: 'Task',
+        entityId: task._id,
+        metadata: { projectId },
+      });
     }
 
     // Add task to project
@@ -147,7 +163,7 @@ exports.getTasksByProject = async (req, res) => {
 exports.getMyTasks = async (req, res) => {
   try {
     const tasks = await Task.find({ assignedTo: req.user._id })
-      .populate('project', 'name')
+      .populate('project', 'title')
       .populate('assignedBy', 'firstName lastName email')
       .sort({ dueDate: 1 });
 
@@ -187,6 +203,7 @@ exports.updateTask = async (req, res) => {
     }
 
     const { title, description, status, priority, dueDate, dueTimezone, assignedTo } = req.body;
+    const previousAssignedTo = task.assignedTo ? task.assignedTo.toString() : null;
 
     if (title) task.title = title;
     if (description) task.description = description;
@@ -228,7 +245,32 @@ exports.updateTask = async (req, res) => {
     }
 
     await task.save();
-    await task.populate(['assignedTo', 'assignedBy']);
+    await populateTaskRelations(task);
+
+    const nextAssignedTo = task.assignedTo ? task.assignedTo.toString() : null;
+    if (nextAssignedTo && nextAssignedTo !== previousAssignedTo) {
+      await createNotification({
+        user: nextAssignedTo,
+        type: 'TaskAssigned',
+        title: 'Task assigned',
+        message: `You were assigned “${task.title}”.`,
+        entityType: 'Task',
+        entityId: task._id,
+        metadata: { projectId: task.project.toString() },
+      });
+    }
+
+    if (status && status !== 'Done' && task.assignedTo) {
+      await createNotification({
+        user: task.assignedTo,
+        type: 'Info',
+        title: 'Task updated',
+        message: `Task “${task.title}” was updated.`,
+        entityType: 'Task',
+        entityId: task._id,
+        metadata: { projectId: task.project.toString() },
+      });
+    }
 
     res.status(200).json({
       success: true,
@@ -284,7 +326,19 @@ exports.updateTaskStatus = async (req, res) => {
     }
 
     await task.save();
-    await task.populate(['assignedTo', 'assignedBy']);
+    await populateTaskRelations(task);
+
+    if (task.assignedTo) {
+      await createNotification({
+        user: task.assignedTo,
+        type: 'Info',
+        title: 'Task status updated',
+        message: `Task “${task.title}” changed to ${status}.`,
+        entityType: 'Task',
+        entityId: task._id,
+        metadata: { projectId: task.project.toString() },
+      });
+    }
 
     res.status(200).json({
       success: true,

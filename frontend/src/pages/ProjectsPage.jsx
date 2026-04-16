@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Plus,
   FolderKanban,
@@ -28,7 +28,8 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
-import { getMockNotifications, normalizeNotifications } from '../utils/notifications';
+import NotificationDropdown from '../components/NotificationDropdown';
+import { normalizeNotifications } from '../utils/notifications';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -99,6 +100,7 @@ const formatUtcToTimeZone = ({ utcIso, timeZone }) => {
 
 const ProjectsPage = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, logout } = useAuth();
   const serverClockRef = useRef({ serverNowMs: null, perfNowMs: null });
   const viewerTimeZone = getUserTimeZone();
@@ -116,7 +118,7 @@ const ProjectsPage = () => {
 
   const getNowMs = () => {
     const { serverNowMs, perfNowMs } = serverClockRef.current;
-    if (serverNowMs === null || perfNowMs === null) return null;
+    if (serverNowMs === null || perfNowMs === null) return Date.now();
     // performance.now() isn't affected by manual system clock changes.
     return serverNowMs + (performance.now() - perfNowMs);
   };
@@ -146,6 +148,13 @@ const ProjectsPage = () => {
   useEffect(() => {
     fetchProjects();
   }, []);
+
+  useEffect(() => {
+    if (location.state?.openCreate) {
+      setShowCreateModal(true);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, location.pathname, navigate]);
 
   useEffect(() => {
     // Legacy guard: if UI state ever contains 'All', normalize it.
@@ -212,11 +221,63 @@ const ProjectsPage = () => {
         const { data } = await api.get('/notifications');
         setNotifications(normalizeNotifications(data));
       } catch {
-        setNotifications(getMockNotifications());
+        setNotifications([]);
       }
     };
     load();
   }, []);
+
+  const reloadNotifications = async () => {
+    const { data } = await api.get('/notifications');
+    setNotifications(normalizeNotifications(data));
+  };
+
+  const handleMarkNotificationRead = async (notification) => {
+    const notificationId = notification?.id || notification?._id;
+    if (!notificationId || notification?.read) return;
+
+    setNotifications((prev) => prev.map((item) => (item.id === notificationId || item._id === notificationId ? { ...item, read: true } : item)));
+    try {
+      await api.patch(`/notifications/${notificationId}/read`);
+    } catch (error) {
+      console.error('Failed to mark notification read:', error);
+      reloadNotifications().catch(() => {});
+    }
+  };
+
+  const handleMarkAllNotificationsRead = async () => {
+    setNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
+    try {
+      await api.patch('/notifications/read-all');
+    } catch (error) {
+      console.error('Failed to mark all notifications read:', error);
+      reloadNotifications().catch(() => {});
+    }
+  };
+
+  const handleDeleteNotification = async (notification, event) => {
+    event?.stopPropagation();
+    const notificationId = notification?.id || notification?._id;
+    if (!notificationId) return;
+
+    setNotifications((prev) => prev.filter((item) => (item.id || item._id) !== notificationId));
+    try {
+      await api.delete(`/notifications/${notificationId}`);
+    } catch (error) {
+      console.error('Failed to delete notification:', error);
+      reloadNotifications().catch(() => {});
+    }
+  };
+
+  const handleClearAllNotifications = async () => {
+    setNotifications([]);
+    try {
+      await api.delete('/notifications/clear-all');
+    } catch (error) {
+      console.error('Failed to clear notifications:', error);
+      reloadNotifications().catch(() => {});
+    }
+  };
 
   const fetchProjects = async (options = {}) => {
     const { silent = false } = options;
@@ -245,10 +306,6 @@ const ProjectsPage = () => {
 
   const handleCreateProject = async (e) => {
     e.preventDefault();
-    if (!serverTimeReady) {
-      toast.error('Syncing server time… please try again in a moment');
-      return;
-    }
     if (!formData.title.trim()) {
       toast.error('Project title is required');
       return;
@@ -355,10 +412,6 @@ const ProjectsPage = () => {
   const handleScheduleProject = async (e) => {
     e.preventDefault();
     if (!scheduleTargetProject?._id) return;
-    if (!serverTimeReady) {
-      toast.error('Syncing server time… please try again in a moment');
-      return;
-    }
 
     const hasScheduleDate = Boolean(scheduleForm.scheduleDate);
     const hasScheduleTime = Boolean(scheduleForm.scheduleTime);
@@ -382,7 +435,7 @@ const ProjectsPage = () => {
     if (scheduleUtcIso) {
       const scheduleMs = getDueMs(scheduleUtcIso);
       const nowMs = getNowMs();
-      if (scheduleMs === null || nowMs === null || scheduleMs <= nowMs) {
+      if (scheduleMs === null || scheduleMs <= nowMs) {
         toast.error('Schedule time must be in the future');
         return;
       }
@@ -465,12 +518,12 @@ const ProjectsPage = () => {
 
   const unreadCount = notifications.filter((item) => !item?.read).length;
 
-  if (loading || !serverTimeReady) {
+  if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-50">
         <div className="flex flex-col items-center gap-3">
           <Loader2 size={40} className="text-violet-600 animate-spin" />
-          <p className="text-gray-600">{loading ? 'Loading projects...' : 'Syncing server time…'}</p>
+          <p className="text-gray-600">Loading projects...</p>
         </div>
       </div>
     );
@@ -505,13 +558,22 @@ const ProjectsPage = () => {
             <button className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium bg-violet-100 text-violet-700 shadow-sm">
               <FolderKanban size={18} /> Projects
             </button>
-            <button className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100">
+            <button
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100"
+              onClick={() => navigate('/tasks')}
+            >
               <CheckSquare size={18} /> Tasks
             </button>
-            <button className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100">
+            <button
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100"
+              onClick={() => navigate('/messages')}
+            >
               <MessageSquare size={18} /> Messages
             </button>
-            <button className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100">
+            <button
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100"
+              onClick={() => navigate('/settings')}
+            >
               <Settings size={18} /> Settings
             </button>
           </nav>
@@ -564,53 +626,14 @@ const ProjectsPage = () => {
                   </button>
 
                   {showNotifications && (
-                    <div className="absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded-xl shadow-xl p-4 z-30">
-                      <div className="flex items-center justify-between mb-3">
-                        <p className="text-sm font-semibold">Notifications</p>
-                        <button
-                          className="text-xs text-violet-600 hover:text-violet-700"
-                          onClick={() =>
-                            setNotifications((prev) => prev.map((note) => ({ ...note, read: true })))
-                          }
-                        >
-                          Mark all read
-                        </button>
-                      </div>
-                      <div className="space-y-3 max-h-80 overflow-auto">
-                        {notifications.length === 0 ? (
-                          <div className="text-center text-sm text-slate-500 py-6">No new notifications</div>
-                        ) : (
-                          notifications.map((note, index) => {
-                            const isRead = !!note?.read;
-                            const text = note?.text || note?.message || note?.title || 'Notification';
-                            const time =
-                              note?.time ||
-                              (note?.createdAt
-                                ? new Date(note.createdAt).toLocaleString()
-                                : note?.timestamp
-                                  ? new Date(note.timestamp).toLocaleString()
-                                  : '');
-
-                            return (
-                              <div
-                                key={note?.id || note?._id || index}
-                                className={`p-3 rounded-lg border text-sm ${
-                                  isRead
-                                    ? 'border-slate-200 bg-slate-50'
-                                    : 'border-violet-200 bg-violet-50'
-                                }`}
-                              >
-                                <div className="flex items-start justify-between">
-                                  <p className="text-slate-700 font-medium">{text}</p>
-                                  {!isRead && <span className="w-2 h-2 bg-violet-500 rounded-full mt-1" />}
-                                </div>
-                                {time && <p className="text-xs text-slate-500 mt-2">{time}</p>}
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
-                    </div>
+                    <NotificationDropdown
+                      notifications={notifications}
+                      onMarkAllRead={handleMarkAllNotificationsRead}
+                      onClearAll={handleClearAllNotifications}
+                      onMarkRead={handleMarkNotificationRead}
+                      onDelete={handleDeleteNotification}
+                      panelClassName="absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded-xl shadow-xl p-4 z-30"
+                    />
                   )}
                 </div>
                 <div className="relative" ref={profileMenuRef}>

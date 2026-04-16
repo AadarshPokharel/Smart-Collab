@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import api from '../services/api';
 import '../styles/TaskBoard.css';
 
 const TaskBoard = () => {
@@ -13,20 +13,19 @@ const TaskBoard = () => {
   const fetchTasks = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
-      const response = await axios.get('http://localhost:5001/api/tasks', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      
+      const { data } = await api.get('/tasks');
+      const responseTasks = Array.isArray(data?.tasks) ? data.tasks : [];
+
       const grouped = {
-        todo: response.data.filter(t => t.status === 'todo'),
-        inProgress: response.data.filter(t => t.status === 'inProgress'),
-        done: response.data.filter(t => t.status === 'done')
+        todo: responseTasks.filter((t) => t.status === 'To Do'),
+        inProgress: responseTasks.filter((t) => t.status === 'In Progress'),
+        done: responseTasks.filter((t) => t.status === 'Done')
       };
       
       setTasks(grouped);
     } catch (error) {
       console.error('Error fetching tasks:', error);
+      setTasks({ todo: [], inProgress: [], done: [] });
     } finally {
       setLoading(false);
     }
@@ -61,7 +60,7 @@ const TaskBoard = () => {
                                task.priority === 'medium' ? '#ffb900' : '#107c10'
                   }}></div>
                   <h4>{task.title}</h4>
-                  <p className="task-project">{task.projectId?.name || 'No Project'}</p>
+                  <p className="task-project">{task.project?.title || task.project?.name || 'No Project'}</p>
                   {task.dueDate && (
                     <p className="task-date">Due: {new Date(task.dueDate).toLocaleDateString()}</p>
                   )}
@@ -88,7 +87,7 @@ const TaskBoard = () => {
                                task.priority === 'medium' ? '#ffb900' : '#107c10'
                   }}></div>
                   <h4>{task.title}</h4>
-                  <p className="task-project">{task.projectId?.name || 'No Project'}</p>
+                  <p className="task-project">{task.project?.title || task.project?.name || 'No Project'}</p>
                   {task.dueDate && (
                     <p className="task-date">Due: {new Date(task.dueDate).toLocaleDateString()}</p>
                   )}
@@ -115,7 +114,7 @@ const TaskBoard = () => {
                                task.priority === 'medium' ? '#ffb900' : '#107c10'
                   }}></div>
                   <h4>{task.title}</h4>
-                  <p className="task-project">{task.projectId?.name || 'No Project'}</p>
+                  <p className="task-project">{task.project?.title || task.project?.name || 'No Project'}</p>
                   {task.dueDate && (
                     <p className="task-date">Due: {new Date(task.dueDate).toLocaleDateString()}</p>
                   )}
