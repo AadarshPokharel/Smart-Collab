@@ -6,6 +6,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
+import CalendarPage from './pages/CalendarPage';
 import ProjectsPage from './pages/ProjectsPage';
 import ProjectPage from './pages/ProjectPage';
 import FeaturePlaceholderPage from './pages/FeaturePlaceholderPage';
@@ -33,6 +34,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <DashboardPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/calendar"
+        element={
+          <ProtectedRoute>
+            <CalendarPage />
           </ProtectedRoute>
         }
       />

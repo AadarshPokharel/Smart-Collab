@@ -6,6 +6,7 @@ import NotificationDropdown from '../components/NotificationDropdown';
 import {
   Bell,
   Calendar,
+  CalendarDays,
   CheckSquare,
   ChevronDown,
   Clock,
@@ -15,12 +16,8 @@ import {
   LogOut,
   Menu,
   MessageSquare,
-  Plus,
   Search,
   Settings,
-  Sparkles,
-  Users,
-  Activity,
   ArrowUpRight,
   X,
 } from 'lucide-react';
@@ -61,6 +58,45 @@ const Badge = ({ tone, children }) => {
     <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border ${styles[tone] || styles.neutral}`}>
       {children}
     </span>
+  );
+};
+
+const OverviewCard = ({ icon: Icon, label, value, tone = 'neutral' }) => {
+  const styles = {
+    rose: {
+      card: 'border-rose-100 bg-rose-50/80',
+      icon: 'bg-white text-rose-600',
+      label: 'text-rose-700',
+    },
+    amber: {
+      card: 'border-amber-100 bg-amber-50/80',
+      icon: 'bg-white text-amber-700',
+      label: 'text-amber-700',
+    },
+    violet: {
+      card: 'border-violet-100 bg-violet-50/80',
+      icon: 'bg-white text-violet-600',
+      label: 'text-violet-700',
+    },
+    neutral: {
+      card: 'border-slate-200 bg-white',
+      icon: 'bg-slate-100 text-slate-600',
+      label: 'text-slate-700',
+    },
+  };
+
+  const toneStyles = styles[tone] || styles.neutral;
+
+  return (
+    <div className={`rounded-2xl border p-4 shadow-sm ${toneStyles.card}`}>
+      <div className="flex items-center justify-between gap-3">
+        <p className={`text-sm font-semibold ${toneStyles.label}`}>{label}</p>
+        <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${toneStyles.icon}`}>
+          <Icon size={16} />
+        </div>
+      </div>
+      <p className="mt-4 text-2xl font-semibold tracking-tight text-slate-900">{value}</p>
+    </div>
   );
 };
 
@@ -117,6 +153,23 @@ const getTaskTone = (task) => {
   return 'border-slate-200 bg-white';
 };
 
+const getTaskUrgencyLabel = (task) => {
+  const dueDate = task?.dueDate ? new Date(task.dueDate) : null;
+  if (!dueDate || Number.isNaN(dueDate.getTime()) || task?.status === 'Done') return 'No deadline';
+
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const tomorrowStart = new Date(startOfToday);
+  tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+  const dayAfterTomorrow = new Date(tomorrowStart);
+  dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 1);
+
+  if (dueDate < startOfToday) return 'Overdue';
+  if (dueDate < tomorrowStart) return 'Due today';
+  if (dueDate < dayAfterTomorrow) return 'Due tomorrow';
+  return 'Coming up';
+};
+
 const compareTaskUrgency = (left, right) => {
   const leftDate = left?.dueDate ? new Date(left.dueDate).getTime() : Number.POSITIVE_INFINITY;
   const rightDate = right?.dueDate ? new Date(right.dueDate).getTime() : Number.POSITIVE_INFINITY;
@@ -125,22 +178,6 @@ const compareTaskUrgency = (left, right) => {
 
   const priorityOrder = { high: 0, medium: 1, low: 2 };
   return (priorityOrder[(left?.priority || '').toLowerCase()] ?? 3) - (priorityOrder[(right?.priority || '').toLowerCase()] ?? 3);
-};
-
-const getNotificationAccent = (notification) => {
-  const type = (notification?.type || '').toLowerCase();
-  if (type.includes('message')) return MessageSquare;
-  if (type.includes('task')) return CheckSquare;
-  if (type.includes('deadline') || type.includes('reminder')) return Clock;
-  if (type.includes('project')) return FolderKanban;
-  return Bell;
-};
-
-const getActivityIcon = (activityItem) => {
-  const text = (activityItem?.text || '').toLowerCase();
-  if (text.includes('project')) return FolderKanban;
-  if (text.includes('task')) return CheckSquare;
-  return Activity;
 };
 
 const DashboardPage = () => {
@@ -152,45 +189,16 @@ const DashboardPage = () => {
   const profileMenuRef = useRef(null);
   const notificationRef = useRef(null);
 
-  const [stats, setStats] = useState({
-    totalProjects: 0,
-    tasksDueToday: 0,
-    inProgressTasks: 0,
-    completedTasks: 0,
-  });
   const [tasks, setTasks] = useState([]);
   const [projects, setProjects] = useState([]);
   const [notifications, setNotifications] = useState([]);
-  const [activity, setActivity] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedTask, setSelectedTask] = useState(null);
-  const [activeQuickAction, setActiveQuickAction] = useState(null);
-  const [quickActionForm, setQuickActionForm] = useState({
-    projectId: '',
-    title: '',
-    description: '',
-    dueDate: '',
-    priority: 'Medium',
-    email: '',
-  });
 
   const handleLogout = () => {
     logout();
     toast.success('Logged out successfully');
     navigate('/login');
-  };
-
-  const handleOpenQuickAction = (actionType = 'invite') => {
-    setActiveQuickAction(actionType);
-    setQuickActionForm((current) => ({
-      ...current,
-      projectId: current.projectId || projects[0]?._id || projects[0]?.id || '',
-      title: '',
-      description: '',
-      dueDate: '',
-      priority: 'Medium',
-      email: '',
-    }));
   };
 
   const getGreeting = () => {
@@ -234,33 +242,23 @@ const DashboardPage = () => {
     return [...list].sort(compareTaskUrgency);
   }, [tasks, normalizedSearch]);
 
-  const upcomingDeadlines = useMemo(() => {
+  const todoTasks = useMemo(() => {
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const tomorrowStart = new Date(startOfToday);
-    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
     const soon = new Date(startOfToday);
     soon.setDate(soon.getDate() + 7);
 
     return filteredTasks
       .filter((task) => {
-        if (!task.dueDate) return false;
+        if (!task.dueDate || task.status === 'Done') return false;
         const dueDate = new Date(task.dueDate);
-        return Number.isFinite(dueDate.getTime()) && dueDate >= startOfToday && dueDate <= soon;
+        return Number.isFinite(dueDate.getTime()) && dueDate <= soon;
       })
       .sort(compareTaskUrgency)
-      .slice(0, 5)
+      .slice(0, 8)
       .map((task) => ({
         ...task,
-        urgencyLabel: (() => {
-          const dueDate = new Date(task.dueDate);
-          if (dueDate < startOfToday && task.status !== 'Done') return 'Overdue';
-          if (dueDate < tomorrowStart && task.status !== 'Done') return 'Due today';
-          const dayAfterTomorrow = new Date(tomorrowStart);
-          dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 1);
-          if (dueDate < dayAfterTomorrow) return 'Due tomorrow';
-          return 'Soon';
-        })(),
+        urgencyLabel: getTaskUrgencyLabel(task),
       }));
   }, [filteredTasks]);
 
@@ -272,45 +270,18 @@ const DashboardPage = () => {
     });
   }, [projects, normalizedSearch]);
 
-  const visibleActivity = useMemo(() => {
-    if (!normalizedSearch) return activity.slice(0, 8);
-    return activity.filter((item) => {
-      const searchable = [item.text, item.actorName, item.projectTitle, item.action].filter(Boolean).join(' ').toLowerCase();
-      return searchable.includes(normalizedSearch);
-    }).slice(0, 8);
-  }, [activity, normalizedSearch]);
-
-  const visibleNotifications = useMemo(() => {
-    if (!normalizedSearch) return notifications.slice(0, 5);
-    return notifications.filter((note) => {
-      const searchable = [note.text, note.title, note.type].filter(Boolean).join(' ').toLowerCase();
-      return searchable.includes(normalizedSearch);
-    }).slice(0, 5);
-  }, [notifications, normalizedSearch]);
-
-  const overdueTasks = useMemo(() => {
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    return filteredTasks.filter((task) => {
-      const dueDate = task.dueDate ? new Date(task.dueDate) : null;
-      return dueDate && dueDate < startOfToday && task.status !== 'Done';
-    }).slice(0, 3);
-  }, [filteredTasks]);
-
-  const dueTodayTasks = useMemo(() => {
-    const today = new Date();
-    const todayString = today.toDateString();
-    return filteredTasks.filter((task) => {
-      const dueDate = task.dueDate ? new Date(task.dueDate) : null;
-      return dueDate && dueDate.toDateString() === todayString && task.status !== 'Done';
-    }).slice(0, 3);
-  }, [filteredTasks]);
-
-  const highPriorityTasks = useMemo(() => {
-    return filteredTasks.filter((task) => (task.priority || '').toLowerCase() === 'high' && task.status !== 'Done').slice(0, 3);
-  }, [filteredTasks]);
-
-  const compactProjects = useMemo(() => visibleProjects.slice(0, 2), [visibleProjects]);
+  const taskPool = normalizedSearch ? filteredTasks : tasks;
+  const projectPool = normalizedSearch ? visibleProjects : projects;
+  const activeProjectCount = projectPool.length;
+  const openTaskCount = taskPool.filter((task) => task.status !== 'Done').length;
+  const dueTodayCount = taskPool.filter((task) => {
+    const dueDate = task.dueDate ? new Date(task.dueDate) : null;
+    return dueDate && dueDate.toDateString() === new Date().toDateString() && task.status !== 'Done';
+  }).length;
+  const overdueCount = taskPool.filter((task) => {
+    const dueDate = task.dueDate ? new Date(task.dueDate) : null;
+    return dueDate && dueDate < new Date(new Date().setHours(0, 0, 0, 0)) && task.status !== 'Done';
+  }).length;
 
   const unreadCount = notifications.filter((item) => !item.read).length;
 
@@ -371,10 +342,6 @@ const DashboardPage = () => {
     navigate(`/projects/${projectId}`);
   };
 
-  const handleCreateProject = () => {
-    navigate('/projects', { state: { openCreate: true } });
-  };
-
   const handleMarkTaskComplete = async (task) => {
     const taskId = task?.id || task?._id;
     if (!taskId || task?.status === 'Done') return;
@@ -393,86 +360,19 @@ const DashboardPage = () => {
     }
   };
 
-  const closeQuickAction = () => {
-    setActiveQuickAction(null);
-    setQuickActionForm({
-      projectId: '',
-      email: '',
-    });
-  };
-
-  const handleQuickActionSubmit = async (event) => {
-    event.preventDefault();
-
-    try {
-      if (activeQuickAction === 'project') {
-        handleCreateProject();
-        closeQuickAction();
-        return;
-      }
-
-      if (activeQuickAction === 'task') {
-        if (!quickActionForm.projectId) {
-          toast.error('Choose a project');
-          return;
-        }
-        if (!quickActionForm.title.trim()) {
-          toast.error('Task title is required');
-          return;
-        }
-
-        await api.post('/tasks', {
-          title: quickActionForm.title.trim(),
-          description: quickActionForm.description.trim(),
-          projectId: quickActionForm.projectId,
-          priority: quickActionForm.priority,
-          dueDate: quickActionForm.dueDate ? new Date(quickActionForm.dueDate).toISOString() : null,
-          assignedTo: user?._id || null,
-        });
-        toast.success('Task added');
-      }
-
-      if (activeQuickAction === 'invite') {
-        if (!quickActionForm.projectId) {
-          toast.error('Choose a project');
-          return;
-        }
-        if (!quickActionForm.email.trim()) {
-          toast.error('Enter an email address');
-          return;
-        }
-
-        await api.post(`/projects/${quickActionForm.projectId}/invite`, {
-          email: quickActionForm.email.trim(),
-        });
-        toast.success('Invite sent');
-      }
-
-      closeQuickAction();
-      await refreshDashboard();
-    } catch (error) {
-      const message = error?.response?.data?.message || error?.response?.data?.error || 'Action failed';
-      toast.error(message);
-    }
-  };
-
   const refreshDashboard = async () => {
     try {
       const { data } = await api.get('/dashboard');
       const dashboard = data?.data || data || {};
 
-      setStats(dashboard.stats || { totalProjects: 0, tasksDueToday: 0, inProgressTasks: 0, completedTasks: 0 });
       setTasks(Array.isArray(dashboard.tasks) ? dashboard.tasks : []);
       setProjects(Array.isArray(dashboard.projects) ? dashboard.projects : []);
       setNotifications(Array.isArray(dashboard.notifications) ? dashboard.notifications : []);
-      setActivity(Array.isArray(dashboard.activity) ? dashboard.activity : []);
     } catch (error) {
       console.error('Failed to load dashboard:', error);
-      setStats({ totalProjects: 0, tasksDueToday: 0, inProgressTasks: 0, completedTasks: 0 });
       setTasks([]);
       setProjects([]);
       setNotifications([]);
-      setActivity([]);
     }
   };
 
@@ -494,23 +394,13 @@ const DashboardPage = () => {
 
           <nav className="flex flex-col gap-2">
             <SidebarItem icon={LayoutGrid} label="Dashboard" active onClick={() => navigate('/dashboard')} />
+            <SidebarItem icon={CalendarDays} label="Calendar" onClick={() => navigate('/calendar')} />
             <SidebarItem icon={FolderKanban} label="Projects" onClick={() => navigate('/projects')} />
             <SidebarItem icon={CheckSquare} label="Tasks" onClick={() => navigate('/tasks')} />
             <SidebarItem icon={MessageSquare} label="Messages" onClick={() => navigate('/messages')} />
             <SidebarItem icon={Settings} label="Settings" onClick={() => navigate('/settings')} />
           </nav>
 
-          <div className="mt-auto rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-white text-violet-600 flex items-center justify-center">
-                <Sparkles size={18} />
-              </div>
-              <div>
-                <p className="text-sm font-semibold">Focus mode</p>
-                <p className="text-xs text-slate-500">Track work, deadlines, and updates.</p>
-              </div>
-            </div>
-          </div>
         </aside>
 
         {isSidebarOpen && (
@@ -536,7 +426,7 @@ const DashboardPage = () => {
                     value={searchTerm}
                     onChange={(event) => setSearchTerm(event.target.value)}
                     className="pl-9 pr-4 py-2 rounded-lg bg-slate-100/70 border border-transparent focus:outline-none focus:ring-2 focus:ring-violet-200 w-72 text-sm"
-                    placeholder="Search tasks, projects, activity"
+                    placeholder="Search tasks and projects"
                   />
                 </div>
               </div>
@@ -608,360 +498,158 @@ const DashboardPage = () => {
           </header>
 
           <main className="px-6 lg:px-10 py-8 space-y-8">
-            <section className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-              <div className="max-w-2xl space-y-3">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-violet-50 text-violet-700 text-xs font-semibold">
-                  <Sparkles size={14} /> SmartCollab dashboard
-                </div>
-                <div>
-                  <h1 className="text-3xl lg:text-4xl font-semibold tracking-tight text-slate-900">
-                    {getGreeting()}, {user?.firstName || 'Student'}
-                  </h1>
-                  <p className="mt-3 text-sm lg:text-base text-slate-500 leading-6">
-                    Stay on top of tasks, deadlines, and project activity without digging through extra menus.
-                  </p>
-                </div>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm min-w-[220px]">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Next action</p>
-                <p className="mt-1 text-sm font-semibold text-slate-900 line-clamp-2">
-                  {overdueTasks[0]?.title || dueTodayTasks[0]?.title || highPriorityTasks[0]?.title || upcomingDeadlines[0]?.title || 'You are all caught up'}
+            <section>
+              <div>
+                <h1 className="text-3xl lg:text-4xl font-semibold tracking-tight text-slate-900">
+                  {getGreeting()}, {user?.firstName || 'Student'}
+                </h1>
+                <p className="mt-2 text-sm text-slate-500">
+                  Your tasks, deadlines, and recent activity.
                 </p>
-                <button
-                  onClick={() => setSelectedTask(overdueTasks[0] || dueTodayTasks[0] || highPriorityTasks[0] || upcomingDeadlines[0] || null)}
-                  className="mt-3 inline-flex items-center gap-2 rounded-xl bg-violet-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                  disabled={!overdueTasks[0] && !dueTodayTasks[0] && !highPriorityTasks[0] && !upcomingDeadlines[0]}
-                >
-                  Open task
-                  <ArrowUpRight size={14} />
-                </button>
               </div>
             </section>
 
-            <section className="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm">
-              <div className="flex items-center justify-between gap-4 mb-5">
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-900">Today Focus</h2>
-                  <p className="text-sm text-slate-500">Urgent work that needs attention within seconds.</p>
-                </div>
-                <div className="inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-                  <AlertTriangle size={14} /> High urgency first
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="rounded-2xl border border-rose-200 bg-rose-50/70 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-semibold text-rose-700">Overdue Tasks</p>
-                    <Badge tone="high">{overdueTasks.length}</Badge>
-                  </div>
-                  <div className="mt-4 space-y-3">
-                    {overdueTasks.length === 0 ? (
-                      <p className="text-sm text-rose-700/70">No overdue tasks.</p>
-                    ) : overdueTasks.map((task) => (
-                      <button
-                        key={task.id}
-                        onClick={() => setSelectedTask(task)}
-                        className="w-full rounded-xl bg-white/90 px-3 py-3 text-left shadow-sm transition hover:shadow"
-                      >
-                        <p className="text-sm font-semibold text-slate-900 line-clamp-1">{task.title}</p>
-                        <p className="mt-1 text-xs text-slate-500">{task.project}</p>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-semibold text-amber-700">Tasks Due Today</p>
-                    <Badge tone="medium">{dueTodayTasks.length}</Badge>
-                  </div>
-                  <div className="mt-4 space-y-3">
-                    {dueTodayTasks.length === 0 ? (
-                      <p className="text-sm text-amber-700/70">No tasks due today.</p>
-                    ) : dueTodayTasks.map((task) => (
-                      <button
-                        key={task.id}
-                        onClick={() => setSelectedTask(task)}
-                        className="w-full rounded-xl bg-white/90 px-3 py-3 text-left shadow-sm transition hover:shadow"
-                      >
-                        <p className="text-sm font-semibold text-slate-900 line-clamp-1">{task.title}</p>
-                        <p className="mt-1 text-xs text-slate-500">{task.project}</p>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-semibold text-slate-700">High Priority</p>
-                    <Badge tone="high">{highPriorityTasks.length}</Badge>
-                  </div>
-                  <div className="mt-4 space-y-3">
-                    {highPriorityTasks.length === 0 ? (
-                      <p className="text-sm text-slate-500">No high-priority tasks.</p>
-                    ) : highPriorityTasks.map((task) => (
-                      <button
-                        key={task.id}
-                        onClick={() => setSelectedTask(task)}
-                        className="w-full rounded-xl bg-white px-3 py-3 text-left shadow-sm transition hover:shadow"
-                      >
-                        <p className="text-sm font-semibold text-slate-900 line-clamp-1">{task.title}</p>
-                        <p className="mt-1 text-xs text-slate-500">{task.project}</p>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
+            <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <OverviewCard icon={FolderKanban} label="Projects" value={activeProjectCount} tone="violet" />
+              <OverviewCard icon={CheckSquare} label="Open Tasks" value={openTaskCount} />
+              <OverviewCard icon={Clock} label="Due Today" value={dueTodayCount} tone="amber" />
+              <OverviewCard icon={AlertTriangle} label="Overdue" value={overdueCount} tone="rose" />
             </section>
 
-            <section className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.7fr)_minmax(340px,1fr)] gap-6">
-              <section className="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm">
+            <section className="grid grid-cols-1 gap-6 xl:min-h-[calc(100vh-18rem)] xl:grid-cols-[minmax(0,1.9fr)_360px] xl:items-stretch">
+              <section className="flex h-full flex-col rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm">
                 <div className="flex items-center justify-between gap-4 mb-5">
-                  <div>
-                    <h2 className="text-lg font-semibold text-slate-900">My Tasks</h2>
-                    <p className="text-sm text-slate-500">Largest section. Sorts by urgency and shows the next action.</p>
-                  </div>
+                  <h2 className="text-lg font-semibold text-slate-900">Projects</h2>
                   <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                    {filteredTasks.length} assigned
+                    {visibleProjects.length}
                   </span>
                 </div>
 
-                <div className="space-y-3">
-                  {filteredTasks.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center text-sm text-slate-500">
-                      No assigned tasks found. Change the search or create a task.
+                <div className="flex-1 space-y-4">
+                  {visibleProjects.length === 0 ? (
+                    <div className="flex h-full min-h-[280px] items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center text-sm text-slate-500">
+                      No active projects.
                     </div>
                   ) : (
-                    filteredTasks.map((task) => {
-                      const dueDate = task.dueDate ? new Date(task.dueDate) : null;
-                      const isOverdue = dueDate && dueDate < new Date(new Date().setHours(0, 0, 0, 0)) && task.status !== 'Done';
-                      const isToday = dueDate && dueDate.toDateString() === new Date().toDateString() && task.status !== 'Done';
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      {visibleProjects.map((project) => {
+                        const projectId = project.id || project._id;
+                        const progress = Math.max(0, Math.min(100, Number(project.progress) || 0));
+                        const deadline = project.deadline || project.dueDate;
 
-                      return (
-                        <div
-                          key={task.id}
-                          className={`rounded-2xl border p-4 transition-all duration-200 hover:shadow-md ${getTaskTone(task)}`}
-                        >
-                          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                            <button
-                              onClick={() => setSelectedTask(task)}
-                              className="min-w-0 text-left flex-1"
-                            >
-                              <div className="flex flex-wrap items-center gap-2">
-                                <p className="text-sm font-semibold text-slate-900">{task.title}</p>
-                                {isOverdue && <Badge tone="high">Overdue</Badge>}
-                                {!isOverdue && isToday && <Badge tone="medium">Due today</Badge>}
+                        return (
+                          <button
+                            key={projectId || project.title}
+                            onClick={() => handleOpenProject(projectId)}
+                            className="rounded-3xl border border-slate-200 bg-white p-5 text-left transition hover:border-violet-200 hover:shadow-sm"
+                          >
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="min-w-0">
+                                <p className="text-base font-semibold text-slate-900">{project.title}</p>
+                                {project.description && (
+                                  <p className="mt-2 text-sm leading-6 text-slate-500 line-clamp-2">
+                                    {project.description}
+                                  </p>
+                                )}
                               </div>
-                              <p className="mt-1 text-xs text-slate-500">{task.project}</p>
-                            </button>
-                            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                              <span className="inline-flex items-center gap-1 rounded-full bg-white/80 px-2.5 py-1">
-                                <Calendar size={13} /> {formatDateLabel(task.dueDate)}
-                              </span>
-                              {task.dueDate && (
-                                <span className="inline-flex items-center gap-1 rounded-full bg-white/80 px-2.5 py-1">
-                                  <Clock size={13} /> {formatRelativeTime(task.dueDate)}
-                                </span>
-                              )}
-                              <Badge tone={getPriorityTone(task.priority)}>{task.priority || 'Medium'}</Badge>
-                              <Badge tone="neutral">{task.status}</Badge>
-                              <button
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  handleMarkTaskComplete(task);
-                                }}
-                                disabled={task.status === 'Done'}
-                                className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                              >
-                                <CheckSquare size={14} />
-                                {task.status === 'Done' ? 'Completed' : 'Mark complete'}
-                              </button>
+                              <ArrowUpRight size={18} className="mt-1 text-slate-400" />
                             </div>
-                          </div>
-                        </div>
-                      );
-                    })
+
+                            <div className="mt-5 flex items-center justify-between gap-3 text-xs font-medium text-slate-500">
+                              <span>Deadline</span>
+                              <span>{formatDateLabel(deadline)}</span>
+                            </div>
+
+                            <div className="mt-2 h-2 rounded-full bg-slate-100">
+                              <div
+                                className="h-2 rounded-full bg-violet-500 transition-all"
+                                style={{ width: `${progress}%` }}
+                              />
+                            </div>
+
+                            <div className="mt-4 flex items-center justify-between gap-3">
+                              <Badge tone="neutral">{progress}% complete</Badge>
+                              <span className="text-sm font-semibold text-violet-600">Open project</span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
                   )}
                 </div>
               </section>
 
-              <div className="space-y-6">
-                <section className="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <h2 className="text-lg font-semibold text-slate-900">Project Snapshot</h2>
-                      <p className="text-sm text-slate-500">Only the most relevant projects.</p>
-                    </div>
-                  </div>
-                  <div className="space-y-3">
-                    {compactProjects.length === 0 ? (
-                      <p className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500 text-center">
-                        No active projects.
-                      </p>
-                    ) : (
-                      compactProjects.map((project) => (
-                        <button
-                          key={project.id}
-                          onClick={() => handleOpenProject(project.id)}
-                          className="w-full rounded-2xl border border-slate-200 p-4 text-left transition hover:border-violet-200 hover:shadow-sm"
-                        >
-                          <div className="mb-2 flex items-center justify-between gap-3">
-                            <p className="text-sm font-semibold text-slate-900">{project.title}</p>
-                            <span className="text-xs font-semibold text-slate-600">{project.progress}%</span>
-                          </div>
-                          <div className="h-2 rounded-full bg-slate-100">
-                            <div className="h-2 rounded-full bg-violet-500 transition-all" style={{ width: `${project.progress}%` }} />
-                          </div>
-                          <p className="mt-2 text-xs text-slate-500">Deadline: {formatDateLabel(project.deadline)}</p>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                </section>
-
-                <section className="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <h2 className="text-lg font-semibold text-slate-900">Notifications</h2>
-                      <p className="text-sm text-slate-500">3–5 recent alerts only.</p>
-                    </div>
-                    <span className="text-xs font-semibold text-slate-500">{unreadCount} unread</span>
-                  </div>
-                  <div className="space-y-3">
-                    {visibleNotifications.length === 0 ? (
-                      <p className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500 text-center">
-                        No notifications yet.
-                      </p>
-                    ) : (
-                      visibleNotifications.map((note) => {
-                        const Icon = getNotificationAccent(note);
-                        return (
-                          <button
-                            key={note.id}
-                            onClick={() => handleMarkNotificationRead(note)}
-                            className={`group w-full rounded-2xl border p-3 text-left transition hover:-translate-y-0.5 hover:shadow-sm ${note.read ? 'border-slate-200 bg-slate-50' : 'border-violet-200 bg-violet-50'}`}
-                          >
-                            <div className="flex items-start gap-3">
-                              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-violet-600 shadow-sm">
-                                <Icon size={16} />
-                              </div>
-                              <div className="min-w-0 flex-1">
-                                <p className="text-sm font-medium text-slate-900">{note.text}</p>
-                                <p className="mt-1 text-xs text-slate-500">{note.time}</p>
-                              </div>
-                              {!note.read && <span className="mt-1 h-2.5 w-2.5 rounded-full bg-violet-500" />}
-                            </div>
-                          </button>
-                        );
-                      })
-                    )}
-                  </div>
-                </section>
-
-                <section className="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <h2 className="text-lg font-semibold text-slate-900">Project Progress</h2>
-                      <p className="text-sm text-slate-500">See how close each project is to completion.</p>
-                    </div>
-                  </div>
-                  <div className="space-y-4">
-                    {visibleProjects.length === 0 ? (
-                      <p className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-sm text-slate-500 text-center">
-                        No projects found.
-                      </p>
-                    ) : null}
-                  </div>
-                </section>
-
-                <section className="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm">
-                  <div className="flex items-center justify-between gap-4 mb-4">
-                    <div>
-                      <h2 className="text-lg font-semibold text-slate-900">Quick Actions</h2>
-                      <p className="text-sm text-slate-500">Visible once, no repeats.</p>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 gap-3">
-                    <button
-                      onClick={handleCreateProject}
-                      className="inline-flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition hover:border-violet-200 hover:bg-violet-50"
-                    >
-                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-violet-600 shadow-sm">
-                        <Plus size={18} />
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900">Create Project</p>
-                        <p className="text-xs text-slate-500">Start a new workspace</p>
-                      </div>
-                    </button>
-                    <button
-                      onClick={() => handleOpenQuickAction('task')}
-                      className="inline-flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition hover:border-violet-200 hover:bg-violet-50"
-                    >
-                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-violet-600 shadow-sm">
-                        <CheckSquare size={18} />
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900">Add Task</p>
-                        <p className="text-xs text-slate-500">Capture work instantly</p>
-                      </div>
-                    </button>
-                    <button
-                      onClick={() => handleOpenQuickAction('invite')}
-                      className="inline-flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition hover:border-violet-200 hover:bg-violet-50"
-                    >
-                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-violet-600 shadow-sm">
-                        <Users size={18} />
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900">Invite Member</p>
-                        <p className="text-xs text-slate-500">Add someone to a project</p>
-                      </div>
-                    </button>
-                  </div>
-                </section>
-              </div>
-            </section>
-
-            <section className="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm">
-              <div className="flex items-center justify-between gap-4 mb-5">
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-900">Recent Activity</h2>
-                  <p className="text-sm text-slate-500">Project changes and task updates from your team.</p>
+              <aside className="flex h-full flex-col rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm">
+                <div className="flex items-center justify-between gap-4 mb-5">
+                  <h2 className="text-lg font-semibold text-slate-900">To Do</h2>
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                    {todoTasks.length}
+                  </span>
                 </div>
-              </div>
-              <div className="space-y-3">
-                {visibleActivity.length === 0 ? (
-                  <p className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-sm text-slate-500 text-center">
-                    No recent activity found.
-                  </p>
-                ) : (
-                  visibleActivity.map((item) => {
-                    const Icon = getActivityIcon(item);
-                    return (
-                      <button
-                        key={item.id}
-                        onClick={() => handleOpenProject(item.projectId)}
-                        className="group w-full rounded-2xl border border-slate-200 bg-white p-4 text-left transition hover:-translate-y-0.5 hover:shadow-sm"
-                      >
-                        <div className="flex items-start gap-3">
-                          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-600 transition group-hover:bg-violet-50 group-hover:text-violet-600">
-                            <Icon size={16} />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <p className="text-sm font-medium text-slate-900">{item.text}</p>
-                              {item.projectTitle && <Badge tone="neutral">{item.projectTitle}</Badge>}
+
+                <div className="flex-1 space-y-3">
+                  {todoTasks.length === 0 ? (
+                    <div className="flex h-full min-h-[280px] items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center text-sm text-slate-500">
+                      No overdue or upcoming tasks.
+                    </div>
+                  ) : (
+                    todoTasks.map((task) => {
+                      const taskId = task.id || task._id;
+                      const urgencyTone =
+                        task.urgencyLabel === 'Overdue'
+                          ? 'high'
+                          : task.urgencyLabel === 'Due today' || task.urgencyLabel === 'Due tomorrow'
+                            ? 'medium'
+                            : 'neutral';
+
+                      return (
+                        <button
+                          key={taskId}
+                          onClick={() => setSelectedTask(task)}
+                          className={`w-full rounded-2xl border p-4 text-left transition hover:shadow-sm ${getTaskTone(task)}`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-slate-900 line-clamp-2">{task.title}</p>
+                              <p className="mt-1 text-xs text-slate-500">{task.project}</p>
                             </div>
-                            <p className="mt-1 text-xs text-slate-500">
-                              {item.actorName || 'Someone'} • {item.time}
-                            </p>
+                            <Badge tone={urgencyTone}>{task.urgencyLabel}</Badge>
                           </div>
-                          <ArrowUpRight size={16} className="mt-1 text-slate-400 transition group-hover:text-violet-600" />
-                        </div>
-                      </button>
-                    );
-                  })
-                )}
-              </div>
+
+                          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-white/80 px-2.5 py-1">
+                              <Calendar size={13} /> {formatDateLabel(task.dueDate)}
+                            </span>
+                            {task.dueDate && (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-white/80 px-2.5 py-1">
+                                <Clock size={13} /> {formatRelativeTime(task.dueDate)}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="mt-3 flex items-center justify-between gap-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge tone={getPriorityTone(task.priority)}>{task.priority || 'Medium'}</Badge>
+                              <Badge tone="neutral">{task.status}</Badge>
+                            </div>
+                            <button
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleMarkTaskComplete(task);
+                              }}
+                              disabled={task.status === 'Done'}
+                              className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                            >
+                              <CheckSquare size={14} />
+                              {task.status === 'Done' ? 'Completed' : 'Done'}
+                            </button>
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </aside>
             </section>
           </main>
         </div>
@@ -1046,122 +734,6 @@ const DashboardPage = () => {
         </div>
       )}
 
-      {activeQuickAction && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
-          <div className="w-full max-w-2xl rounded-3xl bg-white shadow-2xl border border-slate-200 overflow-hidden">
-            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-violet-600">Today</p>
-                <h3 className="mt-1 text-xl font-semibold text-slate-900">
-                  {activeQuickAction === 'task' ? 'Add Task' : 'Invite Member'}
-                </h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  {activeQuickAction === 'task'
-                    ? 'Add a task directly from the dashboard.'
-                    : 'Send a teammate into one of your projects.'}
-                </p>
-              </div>
-              <button
-                onClick={closeQuickAction}
-                className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
-                aria-label="Close quick action"
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <form onSubmit={handleQuickActionSubmit} className="space-y-5 px-6 py-6">
-              <label className="block">
-                <span className="mb-2 block text-sm font-medium text-slate-700">Project</span>
-                <select
-                  value={quickActionForm.projectId}
-                  onChange={(event) => setQuickActionForm((current) => ({ ...current, projectId: event.target.value }))}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-100"
-                >
-                  <option value="">Choose a project</option>
-                  {projects.map((project) => (
-                    <option key={project.id || project._id} value={project.id || project._id}>
-                      {project.title}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              {activeQuickAction === 'task' ? (
-                <>
-                  <label className="block">
-                    <span className="mb-2 block text-sm font-medium text-slate-700">Task title</span>
-                    <input
-                      value={quickActionForm.title}
-                      onChange={(event) => setQuickActionForm((current) => ({ ...current, title: event.target.value }))}
-                      className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-100"
-                      placeholder="e.g. Draft presentation outline"
-                    />
-                  </label>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <label className="block">
-                      <span className="mb-2 block text-sm font-medium text-slate-700">Priority</span>
-                      <select
-                        value={quickActionForm.priority}
-                        onChange={(event) => setQuickActionForm((current) => ({ ...current, priority: event.target.value }))}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-100"
-                      >
-                        <option>High</option>
-                        <option>Medium</option>
-                        <option>Low</option>
-                      </select>
-                    </label>
-                    <label className="block">
-                      <span className="mb-2 block text-sm font-medium text-slate-700">Due date</span>
-                      <input
-                        type="datetime-local"
-                        value={quickActionForm.dueDate}
-                        onChange={(event) => setQuickActionForm((current) => ({ ...current, dueDate: event.target.value }))}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-100"
-                      />
-                    </label>
-                  </div>
-                  <label className="block">
-                    <span className="mb-2 block text-sm font-medium text-slate-700">Description</span>
-                    <textarea
-                      value={quickActionForm.description}
-                      onChange={(event) => setQuickActionForm((current) => ({ ...current, description: event.target.value }))}
-                      className="min-h-28 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-100"
-                      placeholder="Add context, expectations, or links."
-                    />
-                  </label>
-                </>
-              ) : (
-                <label className="block">
-                  <span className="mb-2 block text-sm font-medium text-slate-700">Email address</span>
-                  <input
-                    type="email"
-                    value={quickActionForm.email}
-                    onChange={(event) => setQuickActionForm((current) => ({ ...current, email: event.target.value }))}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-100"
-                    placeholder="teammate@example.com"
-                  />
-                </label>
-              )}
-
-              <div className="flex flex-wrap justify-end gap-3 pt-1">
-                <button
-                  type="button"
-                  onClick={closeQuickAction}
-                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700"
-                >
-                  {activeQuickAction === 'task' ? 'Add task' : 'Send invite'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

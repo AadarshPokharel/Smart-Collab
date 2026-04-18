@@ -13,6 +13,7 @@ import {
   Trash2,
   X,
   LayoutGrid,
+  CalendarDays,
   CheckSquare,
   MessageSquare,
   Settings,
@@ -554,6 +555,12 @@ const ProjectsPage = () => {
               onClick={() => navigate('/dashboard')}
             >
               <LayoutGrid size={18} /> Dashboard
+            </button>
+            <button
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100"
+              onClick={() => navigate('/calendar')}
+            >
+              <CalendarDays size={18} /> Calendar
             </button>
             <button className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium bg-violet-100 text-violet-700 shadow-sm">
               <FolderKanban size={18} /> Projects
