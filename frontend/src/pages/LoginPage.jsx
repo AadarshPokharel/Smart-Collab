@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import GoogleAuthButton from '../components/GoogleAuthButton';
 import '../styles/Auth.css';
 
 export default function LoginPage() {
@@ -13,25 +15,37 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const { login } = useAuth();
 
+  useEffect(() => {
+    const savedRememberPreference = localStorage.getItem('rememberLogin') === 'true';
+    const savedEmail = localStorage.getItem('rememberedEmail') || '';
+
+    if (savedRememberPreference && savedEmail) {
+      setRememberMe(true);
+      setEmail(savedEmail);
+    }
+  }, []);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
     try {
-      console.log('Attempting login with:', email);
       const result = await login(email, password, rememberMe);
-      console.log('Login result:', result);
 
       if (result.success) {
-        console.log('Login successful, navigating to dashboard');
+        if (rememberMe) {
+          localStorage.setItem('rememberLogin', 'true');
+          localStorage.setItem('rememberedEmail', email);
+        } else {
+          localStorage.removeItem('rememberLogin');
+          localStorage.removeItem('rememberedEmail');
+        }
         navigate('/dashboard');
       } else {
-        console.error('Login failed:', result.error);
         setError(result.error);
       }
     } catch (err) {
-      console.error('Login error:', err);
       setError('An unexpected error occurred');
     } finally {
       setLoading(false);
@@ -70,7 +84,7 @@ export default function LoginPage() {
               <input
                 type="email"
                 id="email"
-                placeholder="your.email@example.com"
+                placeholder="Enter your email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -95,8 +109,9 @@ export default function LoginPage() {
                   onClick={() => setShowPassword(!showPassword)}
                   disabled={loading}
                   className="toggle-btn"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
                 >
-                  {showPassword ? '👁️' : '👁️‍🗨️'}
+                  {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
                 </button>
               </div>
             </div>
@@ -111,7 +126,13 @@ export default function LoginPage() {
                 />
                 <span>Remember me</span>
               </label>
-              <button type="button" className="forgot-link">Forgot password?</button>
+              <button
+                type="button"
+                className="forgot-link"
+                onClick={() => navigate('/forgot-password')}
+              >
+                Forgot password?
+              </button>
             </div>
 
             <button
@@ -122,6 +143,16 @@ export default function LoginPage() {
               {loading ? 'Signing In...' : 'Sign In'}
             </button>
           </form>
+
+          <div className="auth-divider">
+            <span>or</span>
+          </div>
+
+          <GoogleAuthButton
+            rememberMe={rememberMe}
+            disabled={loading}
+            text="continue_with"
+          />
 
           <div className="auth-footer">
             <p>

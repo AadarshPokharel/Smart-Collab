@@ -2,39 +2,188 @@ const Task = require('../models/Task');
 const Project = require('../models/Project');
 const { createNotification } = require('../services/notificationService');
 
-const isProjectMember = (project, userId) => {
-  if (!project || !userId) return false;
-  const userIdStr = userId.toString();
+const TASK_STATUSES = ['To Do', 'In Progress', 'In Review', 'Done'];
+const TASK_PRIORITIES = ['Low', 'Medium', 'High'];
 
-  const ownerId = project.owner?._id || project.owner;
-  if (ownerId && ownerId.toString() === userIdStr) return true;
+const toObjectIdString = (value) => {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (value._id) return value._id.toString();
+  return value.toString();
+};
 
+const isGlobalAdmin = (user) => user?.role === 'admin';
+
+const getProjectMemberRecord = (project, userId) => {
+  if (!project || !userId) return null;
+  const userIdStr = toObjectIdString(userId);
   const members = Array.isArray(project.members) ? project.members : [];
-  return members.some((m) => {
-    const memberId = m?.user?._id || m?.user;
-    return memberId && memberId.toString() === userIdStr;
-  });
+
+  return (
+    members.find((member) => {
+      const memberId = toObjectIdString(member?.user);
+      return memberId === userIdStr;
+    }) || null
+  );
+};
+
+const isProjectOwner = (project, userId) => {
+  if (!project || !userId) return false;
+  return toObjectIdString(project.owner) === toObjectIdString(userId);
+};
+
+const isProjectMember = (project, userId) => {
+  return isProjectOwner(project, userId) || !!getProjectMemberRecord(project, userId);
+};
+
+const canViewProject = (project, user) => {
+  return isGlobalAdmin(user) || isProjectMember(project, user?._id);
+};
+
+const canManageProjectTasks = (project, user) => {
+  if (isGlobalAdmin(user) || isProjectOwner(project, user?._id)) {
+    return true;
+  }
+
+  const member = getProjectMemberRecord(project, user?._id);
+  return ['Owner', 'ProjectManager'].includes(member?.role);
+};
+
+const canUpdateTaskStatus = (task, project, user) => {
+  if (canManageProjectTasks(project, user)) {
+    return true;
+  }
+
+  return toObjectIdString(task?.assignedTo) === toObjectIdString(user?._id);
+};
+
+const parseDueDate = (value) => {
+  if (value === undefined) {
+    return { hasValue: false, date: undefined };
+  }
+
+  if (value === null || value === '') {
+    return { hasValue: true, date: null };
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return { error: 'Invalid dueDate' };
+  }
+
+  return { hasValue: true, date: parsed };
+};
+
+const validateStatus = (status) => {
+  if (status === undefined) return null;
+  if (!TASK_STATUSES.includes(status)) {
+    return 'Invalid status';
+  }
+  return null;
+};
+
+const validatePriority = (priority) => {
+  if (priority === undefined) return null;
+  if (!TASK_PRIORITIES.includes(priority)) {
+    return 'Invalid priority';
+  }
+  return null;
+};
+
+const validateAssigneeInProject = (project, assignedTo) => {
+  if (!assignedTo) return null;
+
+  const assignedUserId = toObjectIdString(assignedTo);
+  if (isProjectOwner(project, assignedUserId)) {
+    return null;
+  }
+
+  if (getProjectMemberRecord(project, assignedUserId)) {
+    return null;
+  }
+
+  return 'Assigned user must belong to the selected project';
 };
 
 const populateTaskRelations = async (task) => {
   await task.populate('project', 'title');
-  await task.populate('assignedTo', 'firstName lastName email');
-  await task.populate('assignedBy', 'firstName lastName email');
+  await task.populate('assignedTo', 'firstName lastName email avatar');
+  await task.populate('assignedBy', 'firstName lastName email avatar');
+  return task;
 };
 
-// Create new task
+const sendTaskNotification = async ({ recipientId, actorId, ...payload }) => {
+  if (!recipientId) return;
+  if (toObjectIdString(recipientId) === toObjectIdString(actorId)) return;
+
+  try {
+    await createNotification({
+      user: recipientId,
+      ...payload,
+    });
+  } catch (error) {
+    console.error('Failed to create task notification:', error.message);
+  }
+};
+
+const getAccessibleProjectIds = async (user) => {
+  const projectQuery = isGlobalAdmin(user)
+    ? {}
+    : {
+        $or: [{ owner: user._id }, { 'members.user': user._id }],
+      };
+
+  const projects = await Project.find(projectQuery).select('_id');
+  return projects.map((project) => project._id);
+};
+
+const getTaskAndProject = async (taskId) => {
+  const task = await Task.findById(taskId);
+  if (!task) {
+    return { task: null, project: null };
+  }
+
+  const project = await Project.findById(task.project);
+  return { task, project };
+};
+
 exports.createTask = async (req, res) => {
   try {
-    const { title, description, projectId, priority, dueDate, dueTimezone, assignedTo } = req.body;
+    const {
+      title,
+      description,
+      projectId,
+      assignedTo,
+      priority = 'Medium',
+      status = 'To Do',
+      dueDate,
+      dueTimezone,
+    } = req.body;
 
-    if (!title || !projectId) {
+    const normalizedTitle = typeof title === 'string' ? title.trim() : '';
+    if (!normalizedTitle || !projectId) {
       return res.status(400).json({
         success: false,
         error: 'Title and project are required',
       });
     }
 
-    // Check if project exists and user is member
+    const statusError = validateStatus(status);
+    if (statusError) {
+      return res.status(400).json({
+        success: false,
+        error: statusError,
+      });
+    }
+
+    const priorityError = validatePriority(priority);
+    if (priorityError) {
+      return res.status(400).json({
+        success: false,
+        error: priorityError,
+      });
+    }
+
     const project = await Project.findById(projectId);
     if (!project) {
       return res.status(404).json({
@@ -43,76 +192,93 @@ exports.createTask = async (req, res) => {
       });
     }
 
-    const isMember = isProjectMember(project, req.user._id);
-
-    if (!isMember) {
+    if (!canManageProjectTasks(project, req.user)) {
       return res.status(403).json({
         success: false,
-        error: 'Not a member of this project',
+        error: 'Not authorized to create tasks in this project',
       });
     }
 
-    let parsedDueDate = null;
-    if (dueDate !== undefined && dueDate !== null && dueDate !== '') {
-      parsedDueDate = new Date(dueDate);
-      const ms = parsedDueDate.getTime();
-      if (!Number.isFinite(ms)) {
-        return res.status(400).json({
-          success: false,
-          error: 'Invalid dueDate',
-        });
-      }
-      if (ms <= Date.now()) {
-        return res.status(400).json({
-          success: false,
-          error: 'Schedule time must be in the future',
-        });
-      }
+    const assigneeError = validateAssigneeInProject(project, assignedTo);
+    if (assigneeError) {
+      return res.status(400).json({
+        success: false,
+        error: assigneeError,
+      });
     }
 
-    // Create task
+    const parsedDueDate = parseDueDate(dueDate);
+    if (parsedDueDate.error) {
+      return res.status(400).json({
+        success: false,
+        error: parsedDueDate.error,
+      });
+    }
+
     const task = await Task.create({
-      title,
-      description: description || '',
-      project: projectId,
+      title: normalizedTitle,
+      description: typeof description === 'string' ? description.trim() : '',
+      project: project._id,
       assignedTo: assignedTo || null,
       assignedBy: req.user._id,
-      priority: priority || 'Medium',
-      dueDate: parsedDueDate,
+      priority,
+      status,
+      dueDate: parsedDueDate.hasValue ? parsedDueDate.date : null,
       dueTimezone: typeof dueTimezone === 'string' && dueTimezone.trim() ? dueTimezone.trim() : null,
+      completedAt: status === 'Done' ? new Date() : null,
     });
 
     await populateTaskRelations(task);
 
-    if (assignedTo && assignedTo.toString() !== req.user._id.toString()) {
-      await createNotification({
-        user: assignedTo,
-        type: 'TaskAssigned',
-        title: 'Task assigned',
-        message: `You were assigned “${task.title}”.`,
-        entityType: 'Task',
-        entityId: task._id,
-        metadata: { projectId },
-      });
-    }
+    await sendTaskNotification({
+      recipientId: task.assignedTo,
+      actorId: req.user._id,
+      type: 'TaskAssigned',
+      title: 'Task assigned',
+      message: `You were assigned “${task.title}”.`,
+      entityType: 'Task',
+      entityId: task._id,
+      metadata: { projectId: project._id.toString() },
+    });
 
-    // Add task to project
-    project.tasks.push(task._id);
-    await project.save();
-
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       task,
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error.message,
     });
   }
 };
 
-// Get tasks by project
+exports.getTasks = async (req, res) => {
+  try {
+    const projectIds = await getAccessibleProjectIds(req.user);
+
+    const query = projectIds.length
+      ? { project: { $in: projectIds } }
+      : { _id: { $in: [] } };
+
+    const tasks = await Task.find(query)
+      .populate('project', 'title')
+      .populate('assignedTo', 'firstName lastName email avatar')
+      .populate('assignedBy', 'firstName lastName email avatar')
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      tasks,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+};
+
 exports.getTasksByProject = async (req, res) => {
   try {
     const { projectId } = req.query;
@@ -124,7 +290,6 @@ exports.getTasksByProject = async (req, res) => {
       });
     }
 
-    // Check if user is member of project
     const project = await Project.findById(projectId);
     if (!project) {
       return res.status(404).json({
@@ -133,56 +298,60 @@ exports.getTasksByProject = async (req, res) => {
       });
     }
 
-    const isMember = isProjectMember(project, req.user._id);
-
-    if (!isMember) {
+    if (!canViewProject(project, req.user)) {
       return res.status(403).json({
         success: false,
-        error: 'Not a member of this project',
+        error: 'Not authorized to view tasks for this project',
       });
     }
 
     const tasks = await Task.find({ project: projectId })
-      .populate('assignedTo', 'firstName lastName email')
-      .populate('assignedBy', 'firstName lastName email')
+      .populate('project', 'title')
+      .populate('assignedTo', 'firstName lastName email avatar')
+      .populate('assignedBy', 'firstName lastName email avatar')
       .sort({ createdAt: -1 });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       tasks,
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error.message,
     });
   }
 };
 
-// Get tasks assigned to user
 exports.getMyTasks = async (req, res) => {
   try {
-    const tasks = await Task.find({ assignedTo: req.user._id })
-      .populate('project', 'title')
-      .populate('assignedBy', 'firstName lastName email')
-      .sort({ dueDate: 1 });
+    const projectIds = await getAccessibleProjectIds(req.user);
 
-    res.status(200).json({
+    const query = projectIds.length
+      ? { assignedTo: req.user._id, project: { $in: projectIds } }
+      : { _id: { $in: [] } };
+
+    const tasks = await Task.find(query)
+      .populate('project', 'title')
+      .populate('assignedTo', 'firstName lastName email avatar')
+      .populate('assignedBy', 'firstName lastName email avatar')
+      .sort({ dueDate: 1, createdAt: -1 });
+
+    return res.status(200).json({
       success: true,
       tasks,
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error.message,
     });
   }
 };
 
-// Update task
-exports.updateTask = async (req, res) => {
+exports.getTaskById = async (req, res) => {
   try {
-    const task = await Task.findById(req.params.id);
+    const { task, project } = await getTaskAndProject(req.params.id);
 
     if (!task) {
       return res.status(404).json({
@@ -191,105 +360,215 @@ exports.updateTask = async (req, res) => {
       });
     }
 
-    // Check if user is in the project
-    const project = await Project.findById(task.project);
-    const isMember = isProjectMember(project, req.user._id);
-
-    if (!isMember) {
-      return res.status(403).json({
+    if (!project) {
+      return res.status(404).json({
         success: false,
-        error: 'Not a member of this project',
+        error: 'Project not found',
       });
     }
 
-    const { title, description, status, priority, dueDate, dueTimezone, assignedTo } = req.body;
-    const previousAssignedTo = task.assignedTo ? task.assignedTo.toString() : null;
+    if (!canViewProject(project, req.user)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized to view this task',
+      });
+    }
 
-    if (title) task.title = title;
-    if (description) task.description = description;
-    if (status) task.status = status;
-    if (priority) task.priority = priority;
-    if (dueDate !== undefined) {
-      if (dueDate === null || dueDate === '') {
-        task.dueDate = null;
-      } else {
-        const parsed = new Date(dueDate);
-        const ms = parsed.getTime();
-        if (!Number.isFinite(ms)) {
-          return res.status(400).json({
-            success: false,
-            error: 'Invalid dueDate',
-          });
-        }
-        if (ms <= Date.now()) {
-          return res.status(400).json({
-            success: false,
-            error: 'Schedule time must be in the future',
-          });
-        }
-        task.dueDate = parsed;
+    await populateTaskRelations(task);
+
+    return res.status(200).json({
+      success: true,
+      task,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+};
+
+exports.updateTask = async (req, res) => {
+  try {
+    const { task, project: currentProject } = await getTaskAndProject(req.params.id);
+
+    if (!task) {
+      return res.status(404).json({
+        success: false,
+        error: 'Task not found',
+      });
+    }
+
+    if (!currentProject) {
+      return res.status(404).json({
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    if (!canManageProjectTasks(currentProject, req.user)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized to update this task',
+      });
+    }
+
+    const {
+      title,
+      description,
+      projectId,
+      assignedTo,
+      priority,
+      status,
+      dueDate,
+      dueTimezone,
+    } = req.body;
+
+    let targetProject = currentProject;
+    if (projectId && projectId !== toObjectIdString(currentProject._id)) {
+      targetProject = await Project.findById(projectId);
+      if (!targetProject) {
+        return res.status(404).json({
+          success: false,
+          error: 'Selected project not found',
+        });
       }
+
+      if (!canManageProjectTasks(targetProject, req.user)) {
+        return res.status(403).json({
+          success: false,
+          error: 'Not authorized to move this task to the selected project',
+        });
+      }
+    }
+
+    if (title !== undefined) {
+      const normalizedTitle = typeof title === 'string' ? title.trim() : '';
+      if (!normalizedTitle) {
+        return res.status(400).json({
+          success: false,
+          error: 'Task title is required',
+        });
+      }
+      task.title = normalizedTitle;
+    }
+
+    if (description !== undefined) {
+      task.description = typeof description === 'string' ? description.trim() : '';
+    }
+
+    const statusError = validateStatus(status);
+    if (statusError) {
+      return res.status(400).json({
+        success: false,
+        error: statusError,
+      });
+    }
+    if (status !== undefined) {
+      task.status = status;
+    }
+
+    const priorityError = validatePriority(priority);
+    if (priorityError) {
+      return res.status(400).json({
+        success: false,
+        error: priorityError,
+      });
+    }
+    if (priority !== undefined) {
+      task.priority = priority;
+    }
+
+    const parsedDueDate = parseDueDate(dueDate);
+    if (parsedDueDate.error) {
+      return res.status(400).json({
+        success: false,
+        error: parsedDueDate.error,
+      });
+    }
+    if (parsedDueDate.hasValue) {
+      task.dueDate = parsedDueDate.date;
     }
 
     if (dueTimezone !== undefined) {
       task.dueTimezone =
         typeof dueTimezone === 'string' && dueTimezone.trim() ? dueTimezone.trim() : null;
     }
-    if (assignedTo) task.assignedTo = assignedTo;
 
-    // Mark as completed
-    if (status === 'Done' && !task.completedAt) {
-      task.completedAt = new Date();
-    } else if (status !== 'Done') {
-      task.completedAt = null;
+    const previousAssignedTo = toObjectIdString(task.assignedTo);
+    if (assignedTo !== undefined) {
+      const assigneeError = validateAssigneeInProject(targetProject, assignedTo);
+      if (assigneeError) {
+        return res.status(400).json({
+          success: false,
+          error: assigneeError,
+        });
+      }
+
+      task.assignedTo = assignedTo || null;
     }
+
+    if (projectId && projectId !== toObjectIdString(task.project)) {
+      task.project = targetProject._id;
+    }
+
+    task.completedAt = task.status === 'Done' ? task.completedAt || new Date() : null;
 
     await task.save();
     await populateTaskRelations(task);
 
-    const nextAssignedTo = task.assignedTo ? task.assignedTo.toString() : null;
+    const nextAssignedTo = toObjectIdString(task.assignedTo);
     if (nextAssignedTo && nextAssignedTo !== previousAssignedTo) {
-      await createNotification({
-        user: nextAssignedTo,
+      await sendTaskNotification({
+        recipientId: nextAssignedTo,
+        actorId: req.user._id,
         type: 'TaskAssigned',
         title: 'Task assigned',
         message: `You were assigned “${task.title}”.`,
         entityType: 'Task',
         entityId: task._id,
-        metadata: { projectId: task.project.toString() },
+        metadata: { projectId: toObjectIdString(task.project) },
       });
     }
 
-    if (status && status !== 'Done' && task.assignedTo) {
-      await createNotification({
-        user: task.assignedTo,
+    if (status !== undefined && task.assignedTo) {
+      await sendTaskNotification({
+        recipientId: task.assignedTo,
+        actorId: req.user._id,
         type: 'Info',
         title: 'Task updated',
-        message: `Task “${task.title}” was updated.`,
+        message: `Task “${task.title}” changed to ${task.status}.`,
         entityType: 'Task',
         entityId: task._id,
-        metadata: { projectId: task.project.toString() },
+        metadata: { projectId: toObjectIdString(task.project) },
       });
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       task,
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error.message,
     });
   }
 };
 
-// Update task status
 exports.updateTaskStatus = async (req, res) => {
   try {
     const { status } = req.body;
+    const statusError = validateStatus(status);
 
-    const task = await Task.findById(req.params.id);
+    if (statusError) {
+      return res.status(400).json({
+        success: false,
+        error: statusError,
+      });
+    }
+
+    const { task, project } = await getTaskAndProject(req.params.id);
 
     if (!task) {
       return res.status(404).json({
@@ -298,64 +577,61 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
-    // Check if user is in the project
-    const project = await Project.findById(task.project);
-    const isMember = isProjectMember(project, req.user._id);
-
-    if (!isMember) {
-      return res.status(403).json({
+    if (!project) {
+      return res.status(404).json({
         success: false,
-        error: 'Not a member of this project',
+        error: 'Project not found',
       });
     }
 
-    if (!['To Do', 'In Progress', 'Done'].includes(status)) {
-      return res.status(400).json({
+    if (!canViewProject(project, req.user)) {
+      return res.status(403).json({
         success: false,
-        error: 'Invalid status',
+        error: 'Not authorized to access this task',
+      });
+    }
+
+    if (!canUpdateTaskStatus(task, project, req.user)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized to update this task status',
       });
     }
 
     task.status = status;
-
-    // Mark as completed
-    if (status === 'Done' && !task.completedAt) {
-      task.completedAt = new Date();
-    } else if (status !== 'Done') {
-      task.completedAt = null;
-    }
+    task.completedAt = status === 'Done' ? task.completedAt || new Date() : null;
 
     await task.save();
     await populateTaskRelations(task);
 
     if (task.assignedTo) {
-      await createNotification({
-        user: task.assignedTo,
+      await sendTaskNotification({
+        recipientId: task.assignedTo,
+        actorId: req.user._id,
         type: 'Info',
         title: 'Task status updated',
         message: `Task “${task.title}” changed to ${status}.`,
         entityType: 'Task',
         entityId: task._id,
-        metadata: { projectId: task.project.toString() },
+        metadata: { projectId: toObjectIdString(task.project) },
       });
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       task,
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error.message,
     });
   }
 };
 
-// Delete task
 exports.deleteTask = async (req, res) => {
   try {
-    const task = await Task.findById(req.params.id);
+    const { task, project } = await getTaskAndProject(req.params.id);
 
     if (!task) {
       return res.status(404).json({
@@ -364,32 +640,28 @@ exports.deleteTask = async (req, res) => {
       });
     }
 
-    // Only creator or project leader can delete
-    const project = await Project.findById(task.project);
-    const ownerId = project.owner?._id || project.owner;
-    const isCreatorOrOwner =
-      task.assignedBy.toString() === req.user._id.toString() ||
-      (ownerId && ownerId.toString() === req.user._id.toString());
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        error: 'Project not found',
+      });
+    }
 
-    if (!isCreatorOrOwner) {
+    if (!canManageProjectTasks(project, req.user)) {
       return res.status(403).json({
         success: false,
         error: 'Not authorized to delete this task',
       });
     }
 
-    // Remove from project
-    project.tasks = project.tasks.filter((t) => t.toString() !== req.params.id);
-    await project.save();
-
     await Task.findByIdAndDelete(req.params.id);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: 'Task deleted successfully',
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error.message,
     });

@@ -20,9 +20,26 @@ const userSchema = new mongoose.Schema(
       lowercase: true,
       match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please provide a valid email'],
     },
+    authProvider: {
+      type: String,
+      enum: ['local', 'google', 'firebase'],
+      default: 'local',
+    },
+    firebaseUid: {
+      type: String,
+      default: null,
+      sparse: true,
+    },
+    googleId: {
+      type: String,
+      default: null,
+      sparse: true,
+    },
     password: {
       type: String,
-      required: [true, 'Password is required'],
+      required: function requiredPassword() {
+        return this.authProvider === 'local';
+      },
       minlength: 6,
       select: false, // Don't return password by default
     },
@@ -43,6 +60,45 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    resetPasswordToken: {
+      type: String,
+      default: null,
+      select: false,
+    },
+    resetPasswordExpiresAt: {
+      type: Date,
+      default: null,
+      select: false,
+    },
+    preferences: {
+      timezone: {
+        type: String,
+        default: 'UTC',
+      },
+      theme: {
+        type: String,
+        enum: ['light', 'dark'],
+        default: 'light',
+      },
+      notifications: {
+        taskAssignments: {
+          type: Boolean,
+          default: true,
+        },
+        deadlineReminders: {
+          type: Boolean,
+          default: true,
+        },
+        messageNotifications: {
+          type: Boolean,
+          default: true,
+        },
+        projectUpdates: {
+          type: Boolean,
+          default: true,
+        },
+      },
+    },
   },
   { timestamps: true }
 );
@@ -50,7 +106,7 @@ const userSchema = new mongoose.Schema(
 // Hash password before saving
 userSchema.pre('save', async function (next) {
   // Only hash if password is modified
-  if (!this.isModified('password')) {
+  if (!this.isModified('password') || !this.password) {
     return next();
   }
 
@@ -77,5 +133,7 @@ userSchema.methods.getProfile = function () {
 
 // Create index for faster email lookups
 userSchema.index({ email: 1 });
+userSchema.index({ firebaseUid: 1 }, { sparse: true });
+userSchema.index({ googleId: 1 }, { sparse: true });
 
 module.exports = mongoose.model('User', userSchema);

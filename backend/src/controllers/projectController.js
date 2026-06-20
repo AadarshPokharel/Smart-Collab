@@ -90,9 +90,13 @@ exports.createProject = async (req, res) => {
  */
 exports.getProjects = async (req, res) => {
   try {
-    const projects = await Project.find({
-      $or: [{ owner: req.user._id }, { 'members.user': req.user._id }],
-    })
+    const query = req.user?.role === 'admin'
+      ? {}
+      : {
+          $or: [{ owner: req.user._id }, { 'members.user': req.user._id }],
+        };
+
+    const projects = await Project.find(query)
       .populate('owner', 'firstName lastName email avatar')
       .populate({
         path: 'members.user',

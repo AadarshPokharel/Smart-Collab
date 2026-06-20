@@ -490,7 +490,7 @@ const CalendarPage = () => {
             <SmartCollabLogo size={36} />
             <div>
               <p className="text-lg font-semibold">SmartCollab</p>
-              <p className="text-xs text-slate-500">Student Collaboration</p>
+              <p className="text-xs text-slate-500">Collaboration Platform</p>
             </div>
           </div>
 

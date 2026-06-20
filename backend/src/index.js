@@ -43,6 +43,7 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/smartcoll
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/projects', require('./routes/projects'));
 app.use('/api/tasks', require('./routes/tasks'));
+app.use('/api/messages', require('./routes/messages'));
 app.use('/api/notifications', require('./routes/notifications'));
 
 app.get('/api/dashboard', authMiddleware, getDashboardData);

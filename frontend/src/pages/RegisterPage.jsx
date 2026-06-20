@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import GoogleAuthButton from '../components/GoogleAuthButton';
 import '../styles/Auth.css';
 
 export default function RegisterPage() {
@@ -77,6 +79,16 @@ export default function RegisterPage() {
 
           {error && <div className="error-alert">{error}</div>}
 
+          <GoogleAuthButton
+            rememberMe
+            disabled={loading}
+            text="continue_with"
+          />
+
+          <div className="auth-divider">
+            <span>or create with email</span>
+          </div>
+
           <form onSubmit={handleSubmit}>
             <div className="form-row">
               <div className="form-field">
@@ -113,7 +125,7 @@ export default function RegisterPage() {
                 type="email"
                 id="email"
                 name="email"
-                placeholder="your.email@example.com"
+                placeholder="Enter your email"
                 value={formData.email}
                 onChange={handleChange}
                 required
@@ -128,7 +140,7 @@ export default function RegisterPage() {
                   type={showPassword ? 'text' : 'password'}
                   id="password"
                   name="password"
-                  placeholder="Create a strong password"
+                  placeholder="Create your password"
                   value={formData.password}
                   onChange={handleChange}
                   required
@@ -139,8 +151,9 @@ export default function RegisterPage() {
                   onClick={() => setShowPassword(!showPassword)}
                   disabled={loading}
                   className="toggle-btn"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
                 >
-                  {showPassword ? '👁️' : '👁️‍🗨️'}
+                  {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
                 </button>
               </div>
             </div>
@@ -163,8 +176,9 @@ export default function RegisterPage() {
                   onClick={() => setShowConfirmPassword(!showConfirmPassword)}
                   disabled={loading}
                   className="toggle-btn"
+                  aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
                 >
-                  {showConfirmPassword ? '👁️' : '👁️‍🗨️'}
+                  {showConfirmPassword ? <EyeOff size={17} /> : <Eye size={17} />}
                 </button>
               </div>
             </div>

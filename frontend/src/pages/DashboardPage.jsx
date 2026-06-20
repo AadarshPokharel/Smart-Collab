@@ -388,7 +388,7 @@ const DashboardPage = () => {
             <SmartCollabLogo size={36} />
             <div>
               <p className="text-lg font-semibold">SmartCollab</p>
-              <p className="text-xs text-slate-500">Student Collaboration</p>
+              <p className="text-xs text-slate-500">Collaboration Platform</p>
             </div>
           </div>
 
@@ -501,7 +501,7 @@ const DashboardPage = () => {
             <section>
               <div>
                 <h1 className="text-3xl lg:text-4xl font-semibold tracking-tight text-slate-900">
-                  {getGreeting()}, {user?.firstName || 'Student'}
+                  {getGreeting()}, {user?.firstName || 'User'}
                 </h1>
                 <p className="mt-2 text-sm text-slate-500">
                   Your tasks, deadlines, and recent activity.

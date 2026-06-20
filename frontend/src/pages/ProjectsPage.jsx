@@ -545,7 +545,7 @@ const ProjectsPage = () => {
             <img src="/logo.jpg" alt="SmartCollab" className="w-9 h-9 object-contain" />
             <div>
               <p className="text-lg font-semibold">SmartCollab</p>
-              <p className="text-xs text-slate-500">Student Collaboration</p>
+              <p className="text-xs text-slate-500">Collaboration Platform</p>
             </div>
           </div>
 

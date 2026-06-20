@@ -1,4 +1,4 @@
-# SmartCollab - Student Team Collaboration Platform
+# SmartCollab - Collaboration Platform
 
 **Version:** 1.0.0  
 **Status:** In Development  
@@ -8,10 +8,10 @@
 
 ## Project Overview
 
-SmartCollab is a web-based collaboration platform designed specifically for student teams to manage group projects efficiently. It provides a centralized system for task management, team communication, deadline tracking, and contribution monitoring.
+SmartCollab is a web-based collaboration platform designed to help teams manage projects efficiently. It provides a centralized system for task management, team communication, deadline tracking, and contribution monitoring.
 
 ### Problem Statement
-Student teams struggle with:
+Teams often struggle with:
 - Organizing group projects across multiple tools
 - Managing deadlines effectively
 - Tracking task progress

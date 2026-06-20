@@ -5,11 +5,15 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
 import DashboardPage from './pages/DashboardPage';
 import CalendarPage from './pages/CalendarPage';
 import ProjectsPage from './pages/ProjectsPage';
 import ProjectPage from './pages/ProjectPage';
-import FeaturePlaceholderPage from './pages/FeaturePlaceholderPage';
+import TasksPage from './pages/TasksPage';
+import MessagesPage from './pages/MessagesPage';
+import SettingsPage from './pages/SettingsPage';
 import './styles/App.css';
 
 function AppRoutes() {
@@ -26,6 +30,14 @@ function AppRoutes() {
       <Route
         path="/register"
         element={token ? <Navigate to="/dashboard" /> : <RegisterPage />}
+      />
+      <Route
+        path="/forgot-password"
+        element={token ? <Navigate to="/dashboard" /> : <ForgotPasswordPage />}
+      />
+      <Route
+        path="/reset-password/:token"
+        element={token ? <Navigate to="/dashboard" /> : <ResetPasswordPage />}
       />
 
       {/* Protected routes */}
@@ -65,10 +77,7 @@ function AppRoutes() {
         path="/tasks"
         element={
           <ProtectedRoute>
-            <FeaturePlaceholderPage
-              title="Tasks"
-              description="Manage assigned work, due dates, and status updates from a dedicated task workspace."
-            />
+            <TasksPage />
           </ProtectedRoute>
         }
       />
@@ -76,10 +85,7 @@ function AppRoutes() {
         path="/messages"
         element={
           <ProtectedRoute>
-            <FeaturePlaceholderPage
-              title="Messages"
-              description="Team conversations, mentions, and message threads will live here when the messaging workspace is added."
-            />
+            <MessagesPage />
           </ProtectedRoute>
         }
       />
@@ -87,10 +93,7 @@ function AppRoutes() {
         path="/settings"
         element={
           <ProtectedRoute>
-            <FeaturePlaceholderPage
-              title="Settings"
-              description="Profile settings, workspace preferences, and notification controls can be managed from this area."
-            />
+            <SettingsPage />
           </ProtectedRoute>
         }
       />

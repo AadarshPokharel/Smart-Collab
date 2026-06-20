@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Bell, ChevronDown, LogOut, Settings } from 'lucide-react';
 import { projectService, taskService } from '../services';
