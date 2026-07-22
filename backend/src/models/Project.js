@@ -64,6 +64,88 @@ const projectSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    meetings: [
+      {
+        title: {
+          type: String,
+          required: true,
+          trim: true,
+          maxlength: [120, 'Meeting title cannot exceed 120 characters'],
+        },
+        description: {
+          type: String,
+          trim: true,
+          default: '',
+          maxlength: [500, 'Meeting description cannot exceed 500 characters'],
+        },
+        meetingLink: {
+          type: String,
+          trim: true,
+          default: '',
+          maxlength: [1000, 'Meeting link cannot exceed 1000 characters'],
+        },
+        scheduledFor: {
+          type: Date,
+          required: true,
+        },
+        timezone: {
+          type: String,
+          default: null,
+        },
+        participants: [
+          {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+          },
+        ],
+        createdBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          required: true,
+        },
+        status: {
+          type: String,
+          enum: ['Scheduled', 'Completed', 'Cancelled'],
+          default: 'Scheduled',
+        },
+      },
+    ],
+    sharedResources: [
+      {
+        title: {
+          type: String,
+          required: true,
+          trim: true,
+          maxlength: [120, 'Resource title cannot exceed 120 characters'],
+        },
+        description: {
+          type: String,
+          trim: true,
+          default: '',
+          maxlength: [300, 'Resource description cannot exceed 300 characters'],
+        },
+        type: {
+          type: String,
+          enum: ['link', 'file'],
+          default: 'link',
+        },
+        url: {
+          type: String,
+          required: true,
+          trim: true,
+          maxlength: [1000, 'Resource URL cannot exceed 1000 characters'],
+        },
+        uploadedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          required: true,
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
   },
   { timestamps: true }
 );
@@ -72,5 +154,6 @@ const projectSchema = new mongoose.Schema(
 projectSchema.index({ owner: 1 });
 projectSchema.index({ members: 1 });
 projectSchema.index({ status: 1 });
+projectSchema.index({ 'meetings.scheduledFor': 1 });
 
 module.exports = mongoose.model('Project', projectSchema);

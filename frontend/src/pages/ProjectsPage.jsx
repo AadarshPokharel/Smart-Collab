@@ -99,13 +99,24 @@ const formatUtcToTimeZone = ({ utcIso, timeZone }) => {
   return d.tz(timeZone).format('MMM D, YYYY h:mm A');
 };
 
+const formatDateLabel = (value) => {
+  if (!value) return 'No date set';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return 'No date set';
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+};
+
 const ProjectsPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
   const serverClockRef = useRef({ serverNowMs: null, perfNowMs: null });
   const viewerTimeZone = getUserTimeZone();
-  const [serverTimeReady, setServerTimeReady] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const profileMenuRef = useRef(null);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -130,21 +141,50 @@ const ProjectsPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('Active');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editTargetProject, setEditTargetProject] = useState(null);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [scheduleTargetProject, setScheduleTargetProject] = useState(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(null);
   const [createLoading, setCreateLoading] = useState(false);
+  const [editLoading, setEditLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [archiveLoadingId, setArchiveLoadingId] = useState('');
   const [formData, setFormData] = useState({
     title: '',
     description: '',
     scheduleDate: '',
     scheduleTime: '',
   });
+  const [editFormData, setEditFormData] = useState({
+    title: '',
+    description: '',
+    scheduleDate: '',
+    scheduleTime: '',
+  });
   const [scheduleForm, setScheduleForm] = useState({ scheduleDate: '', scheduleTime: '' });
-  const scheduledTimeoutsRef = useRef([]);
-  const scheduledTriggeredRef = useRef(new Set());
-  const [scheduleTick, setScheduleTick] = useState(0);
+
+  const projectToFormData = (project) => {
+    const dueMs = getDueMs(project?.dueDate);
+    if (!dueMs) {
+      return {
+        title: project?.title || '',
+        description: project?.description || '',
+        scheduleDate: '',
+        scheduleTime: '',
+      };
+    }
+
+    const date = new Date(dueMs);
+    return {
+      title: project?.title || '',
+      description: project?.description || '',
+      scheduleDate: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+        date.getDate()
+      ).padStart(2, '0')}`,
+      scheduleTime: `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`,
+    };
+  };
 
   useEffect(() => {
     fetchProjects();
@@ -174,8 +214,6 @@ const ProjectsPage = () => {
             serverNowMs: nowMs,
             perfNowMs: performance.now(),
           };
-          setServerTimeReady(true);
-          setScheduleTick(Date.now());
         }
       } catch {
         // Ignore; scheduling stays disabled until server time is available.
@@ -315,7 +353,7 @@ const ProjectsPage = () => {
     const hasScheduleDate = Boolean(formData.scheduleDate);
     const hasScheduleTime = Boolean(formData.scheduleTime);
     if (hasScheduleDate !== hasScheduleTime) {
-      toast.error('Please select both schedule date and schedule time');
+      toast.error('Please select both deadline date and deadline time');
       return;
     }
 
@@ -327,7 +365,7 @@ const ProjectsPage = () => {
     });
 
     if (hasScheduleDate && hasScheduleTime && !scheduleUtcIso) {
-      toast.error('Invalid schedule date/time');
+      toast.error('Invalid deadline date/time');
       return;
     }
 
@@ -335,11 +373,11 @@ const ProjectsPage = () => {
       const scheduleMs = getDueMs(scheduleUtcIso);
       const nowMs = getNowMs();
       if (scheduleMs === null || nowMs === null) {
-        toast.error('Invalid schedule date/time');
+        toast.error('Invalid deadline date/time');
         return;
       }
       if (scheduleMs <= nowMs) {
-        toast.error('Schedule time must be in the future');
+        toast.error('Deadline must be in the future');
         return;
       }
     }
@@ -364,7 +402,6 @@ const ProjectsPage = () => {
           nextCreatedProject.dueTimezone = creatorTimeZone;
         }
         setProjects((prev) => [...prev, nextCreatedProject]);
-        setScheduleTick(Date.now());
         // Re-sync in background so UI reflects canonical backend data.
         fetchProjects({ silent: true });
       }
@@ -394,6 +431,101 @@ const ProjectsPage = () => {
     }
   };
 
+  const openEditModal = (project) => {
+    setEditTargetProject(project);
+    setEditFormData(projectToFormData(project));
+    setShowEditModal(true);
+  };
+
+  const handleUpdateProject = async (e) => {
+    e.preventDefault();
+    if (!editTargetProject?._id) return;
+
+    if (!editFormData.title.trim()) {
+      toast.error('Project title is required');
+      return;
+    }
+
+    const hasScheduleDate = Boolean(editFormData.scheduleDate);
+    const hasScheduleTime = Boolean(editFormData.scheduleTime);
+    if (hasScheduleDate !== hasScheduleTime) {
+      toast.error('Please select both deadline date and deadline time');
+      return;
+    }
+
+    const creatorTimeZone = viewerTimeZone;
+    const scheduleUtcIso = buildUtcIsoFromLocalInputs({
+      scheduleDate: editFormData.scheduleDate,
+      scheduleTime: editFormData.scheduleTime,
+      timeZone: creatorTimeZone,
+    });
+
+    if (hasScheduleDate && hasScheduleTime && !scheduleUtcIso) {
+      toast.error('Invalid deadline date/time');
+      return;
+    }
+
+    if (scheduleUtcIso) {
+      const scheduleMs = getDueMs(scheduleUtcIso);
+      const nowMs = getNowMs();
+      if (scheduleMs === null || nowMs === null || scheduleMs <= nowMs) {
+        toast.error('Deadline must be in the future');
+        return;
+      }
+    }
+
+    try {
+      setEditLoading(true);
+      const { data } = await api.put(`/projects/${editTargetProject._id}`, {
+        title: editFormData.title.trim(),
+        description: editFormData.description.trim(),
+        dueDate: scheduleUtcIso,
+        dueTimezone: scheduleUtcIso ? creatorTimeZone : null,
+      });
+
+      const updatedProject = data?.data || data;
+      if (updatedProject?._id) {
+        setProjects((previous) =>
+          previous.map((project) => (project._id === updatedProject._id ? updatedProject : project))
+        );
+      }
+
+      setShowEditModal(false);
+      setEditTargetProject(null);
+      toast.success(data?.message || 'Project updated successfully');
+      fetchProjects({ silent: true });
+    } catch (error) {
+      console.error('Failed to update project:', error);
+      toast.error(error.response?.data?.message || 'Failed to update project');
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
+  const handleToggleArchiveProject = async (project) => {
+    if (!project?._id) return;
+
+    const nextStatus = project.status === 'Archived' ? 'Active' : 'Archived';
+
+    try {
+      setArchiveLoadingId(project._id);
+      const { data } = await api.put(`/projects/${project._id}`, { status: nextStatus });
+      const updatedProject = data?.data || data;
+      if (updatedProject?._id) {
+        setProjects((previous) =>
+          previous.map((item) => (item._id === updatedProject._id ? updatedProject : item))
+        );
+      }
+      toast.success(nextStatus === 'Archived' ? 'Project archived' : 'Project restored');
+      fetchProjects({ silent: true });
+    } catch (error) {
+      console.error('Failed to toggle project archive state:', error);
+      toast.error(error.response?.data?.message || 'Failed to update project status');
+    } finally {
+      setArchiveLoadingId('');
+    }
+  };
+
   const openScheduleModal = (project) => {
     setScheduleTargetProject(project);
 
@@ -417,7 +549,7 @@ const ProjectsPage = () => {
     const hasScheduleDate = Boolean(scheduleForm.scheduleDate);
     const hasScheduleTime = Boolean(scheduleForm.scheduleTime);
     if (hasScheduleDate !== hasScheduleTime) {
-      toast.error('Please select both schedule date and schedule time');
+      toast.error('Please select both deadline date and deadline time');
       return;
     }
 
@@ -429,7 +561,7 @@ const ProjectsPage = () => {
     });
 
     if (hasScheduleDate && hasScheduleTime && !scheduleUtcIso) {
-      toast.error('Invalid schedule date/time');
+      toast.error('Invalid deadline date/time');
       return;
     }
 
@@ -437,7 +569,7 @@ const ProjectsPage = () => {
       const scheduleMs = getDueMs(scheduleUtcIso);
       const nowMs = getNowMs();
       if (scheduleMs === null || scheduleMs <= nowMs) {
-        toast.error('Schedule time must be in the future');
+        toast.error('Deadline must be in the future');
         return;
       }
     }
@@ -461,13 +593,12 @@ const ProjectsPage = () => {
         );
       }
 
-      setScheduleTick(Date.now());
       setShowScheduleModal(false);
       setScheduleTargetProject(null);
-      toast.success('Project scheduled');
+      toast.success('Project deadline updated');
     } catch (error) {
-      console.error('Failed to schedule project:', error);
-      toast.error(error.response?.data?.message || 'Failed to schedule project');
+      console.error('Failed to update project deadline:', error);
+      toast.error(error.response?.data?.message || 'Failed to update project deadline');
     }
   };
 
@@ -477,45 +608,9 @@ const ProjectsPage = () => {
       project.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
       project.description?.toLowerCase().includes(searchTerm.toLowerCase());
 
-    const dueMs = getDueMs(project.dueDate);
-    const isFutureScheduled = now !== null && dueMs !== null && dueMs > now;
-
-    // Scheduled projects are hidden from All/Active/Archived until their scheduled time.
-    if (filterStatus === 'Scheduled') {
-      return matchesSearch && isFutureScheduled;
-    }
-
-    const matchesStatus = project.status === filterStatus;
-    return matchesSearch && matchesStatus && !isFutureScheduled;
+    const projectStatus = project.status || 'Active';
+    return matchesSearch && projectStatus === filterStatus;
   });
-
-  useEffect(() => {
-    scheduledTimeoutsRef.current.forEach((timeoutId) => clearTimeout(timeoutId));
-    scheduledTimeoutsRef.current = [];
-
-    const now = getNowMs();
-    if (now === null) return;
-
-    projects.forEach((project) => {
-      if (!project.dueDate) return;
-      if (scheduledTriggeredRef.current.has(project._id)) return;
-
-      const scheduleTime = getDueMs(project.dueDate);
-      if (scheduleTime === null || scheduleTime <= now) return;
-
-      const timeoutId = setTimeout(() => {
-        toast.success(`Scheduled project is live: ${project.title}`);
-        scheduledTriggeredRef.current.add(project._id);
-        setScheduleTick(Date.now());
-      }, scheduleTime - now);
-
-      scheduledTimeoutsRef.current.push(timeoutId);
-    });
-
-    return () => {
-      scheduledTimeoutsRef.current.forEach((timeoutId) => clearTimeout(timeoutId));
-    };
-  }, [projects, scheduleTick]);
 
   const unreadCount = notifications.filter((item) => !item?.read).length;
 
@@ -608,6 +703,8 @@ const ProjectsPage = () => {
                 <div className="relative hidden md:block">
                   <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
+                    value={searchTerm}
+                    onChange={(event) => setSearchTerm(event.target.value)}
                     className="pl-9 pr-4 py-2 rounded-lg bg-slate-100/70 border border-transparent focus:outline-none focus:ring-2 focus:ring-violet-200 w-64 text-sm"
                     placeholder="Search projects"
                   />
@@ -729,7 +826,6 @@ const ProjectsPage = () => {
             >
               <option value="Active">Active</option>
               <option value="Archived">Archived</option>
-              <option value="Scheduled">Scheduled</option>
             </select>
           </div>
         </div>
@@ -752,13 +848,18 @@ const ProjectsPage = () => {
         {/* Projects Grid */}
         {filteredProjects.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredProjects.map(project => (
+              {filteredProjects.map(project => (
               <ProjectCard
                 key={project._id}
                 project={project}
                 nowMs={now}
                 onSchedule={() => openScheduleModal(project)}
+                onEdit={() => openEditModal(project)}
+                onToggleArchive={() => handleToggleArchiveProject(project)}
+                onView={() => navigate(`/projects/${project._id}`)}
+                onOpenBoard={() => navigate(`/projects/${project._id}?tab=board`)}
                 onDelete={() => setShowDeleteConfirm(project)}
+                archiveLoading={archiveLoadingId === project._id}
               />
             ))}
           </div>
@@ -787,6 +888,26 @@ const ProjectsPage = () => {
                 formData={formData}
                 setFormData={setFormData}
                 loading={createLoading}
+                titleText="Create New Project"
+                submitLabel="Create Project"
+                submitLoadingLabel="Creating..."
+              />
+            )}
+
+            {showEditModal && editTargetProject && (
+              <CreateProjectModal
+                isOpen={showEditModal}
+                onClose={() => {
+                  setShowEditModal(false);
+                  setEditTargetProject(null);
+                }}
+                onSubmit={handleUpdateProject}
+                formData={editFormData}
+                setFormData={setEditFormData}
+                loading={editLoading}
+                titleText="Edit Project"
+                submitLabel="Save Changes"
+                submitLoadingLabel="Saving..."
               />
             )}
 
@@ -806,13 +927,24 @@ const ProjectsPage = () => {
   );
 };
 
-const ProjectCard = ({ project, nowMs, onSchedule, onDelete }) => {
+const ProjectCard = ({
+  project,
+  nowMs,
+  onSchedule,
+  onEdit,
+  onToggleArchive,
+  onView,
+  onOpenBoard,
+  onDelete,
+  archiveLoading = false,
+}) => {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef(null);
   const dueMs = getDueMs(project.dueDate);
-  const isFutureScheduled = dueMs !== null && dueMs > nowMs;
-  const primaryStatusLabel = isFutureScheduled ? 'Scheduled' : project.status;
-  const showSecondaryArchived = isFutureScheduled && project.status === 'Archived';
+  const isArchived = project.status === 'Archived';
+  const isOverdueDeadline = dueMs !== null && dueMs < nowMs && !isArchived;
+  const primaryStatusLabel = project.status || 'Active';
+  const progress = Math.max(0, Math.min(100, Number(project.progress) || 0));
   const viewerTimeZone = getUserTimeZone();
   const creatorTimeZone =
     typeof project?.dueTimezone === 'string' && project.dueTimezone.trim()
@@ -825,6 +957,9 @@ const ProjectCard = ({ project, nowMs, onSchedule, onDelete }) => {
   const scheduledCreatorText = creatorTimeZone
     ? formatUtcToTimeZone({ utcIso: project.dueDate, timeZone: creatorTimeZone })
     : null;
+
+  const nextMeeting = project?.upcomingMeeting;
+  const sharedResourcesCount = Number(project?.sharedResourcesCount) || 0;
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -845,8 +980,8 @@ const ProjectCard = ({ project, nowMs, onSchedule, onDelete }) => {
   return (
     <div
       className={`rounded-lg border p-6 transition-shadow ${
-        isFutureScheduled
-          ? 'bg-slate-50 border-slate-200/80 opacity-75 hover:opacity-90 hover:shadow-md'
+        isArchived
+          ? 'bg-slate-50 border-slate-200/80 opacity-80 hover:opacity-95 hover:shadow-md'
           : 'bg-white border-gray-200 hover:shadow-lg'
       }`}
     >
@@ -873,13 +1008,26 @@ const ProjectCard = ({ project, nowMs, onSchedule, onDelete }) => {
                 }}
                 className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
               >
-                <Bell size={14} /> Schedule
+                <CalendarDays size={14} /> Edit Deadline
               </button>
-              <button className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setShowMenu(false);
+                  onEdit?.();
+                }}
+                className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+              >
                 <Edit2 size={14} /> Edit
               </button>
-              <button className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
-                <Archive size={14} /> Archive
+              <button
+                onClick={() => {
+                  setShowMenu(false);
+                  onToggleArchive?.();
+                }}
+                disabled={archiveLoading}
+                className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2 disabled:opacity-50"
+              >
+                <Archive size={14} /> {project.status === 'Archived' ? 'Restore' : 'Archive'}
               </button>
               <button
                 onClick={() => {
@@ -899,18 +1047,18 @@ const ProjectCard = ({ project, nowMs, onSchedule, onDelete }) => {
       <div className="mb-3 flex items-center gap-2">
         <span
           className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-            primaryStatusLabel === 'Scheduled'
-              ? 'bg-violet-100 text-violet-700'
-              : primaryStatusLabel === 'Active'
+            primaryStatusLabel === 'Active'
                 ? 'bg-emerald-100 text-emerald-700'
-                : 'bg-gray-100 text-gray-700'
+                : primaryStatusLabel === 'Archived'
+                  ? 'bg-gray-100 text-gray-700'
+                  : 'bg-violet-100 text-violet-700'
           }`}
         >
           {primaryStatusLabel}
         </span>
-        {showSecondaryArchived && (
-          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
-            Archived
+        {isOverdueDeadline && (
+          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-rose-100 text-rose-700">
+            Past deadline
           </span>
         )}
       </div>
@@ -924,7 +1072,7 @@ const ProjectCard = ({ project, nowMs, onSchedule, onDelete }) => {
 
       {project.dueDate && (
         <p className="text-xs text-gray-500 mb-4">
-          Scheduled:{' '}
+          Deadline:{' '}
           {scheduledViewerText || new Date(project.dueDate).toLocaleString()}{' '}
           <span className="text-gray-400">({viewerTimeZone})</span>
           {scheduledCreatorText && creatorTimeZone && creatorTimeZone !== viewerTimeZone && (
@@ -967,19 +1115,50 @@ const ProjectCard = ({ project, nowMs, onSchedule, onDelete }) => {
       <div className="mb-4">
         <div className="flex justify-between mb-2">
           <span className="text-xs font-medium text-gray-600">Task Progress</span>
-          <span className="text-xs font-medium text-gray-900">0%</span>
+          <span className="text-xs font-medium text-gray-900">{progress}%</span>
         </div>
         <div className="w-full bg-gray-200 rounded-full h-2">
-          <div className="bg-violet-600 h-2 rounded-full" style={{ width: '0%' }}></div>
+          <div className="bg-violet-600 h-2 rounded-full" style={{ width: `${progress}%` }}></div>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-gray-500">
+          <span>{project.completedTasks || 0}/{project.totalTasks || 0} tasks complete</span>
+          {typeof project.openTasks === 'number' ? <span>• {project.openTasks} open</span> : null}
+          {typeof project.overdueTasks === 'number' && project.overdueTasks > 0 ? (
+            <span className="text-rose-600">• {project.overdueTasks} overdue</span>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mb-4 space-y-2">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          {nextMeeting?.title ? (
+            <>
+              <span className="font-semibold text-slate-700">Next meeting:</span>{' '}
+              {nextMeeting.title} on{' '}
+              {formatUtcToTimeZone({ utcIso: nextMeeting.scheduledFor, timeZone: viewerTimeZone }) ||
+                formatDateLabel(nextMeeting.scheduledFor)}
+            </>
+          ) : (
+            'No meeting scheduled yet'
+          )}
+        </div>
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          <span className="font-semibold text-slate-700">Shared resources:</span> {sharedResourcesCount}
         </div>
       </div>
 
       {/* Buttons */}
       <div className="flex gap-2">
-        <button className="flex-1 px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors">
+        <button
+          onClick={onView}
+          className="flex-1 px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+        >
           View Details
         </button>
-        <button className="flex-1 px-3 py-2 text-sm font-medium text-white bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors">
+        <button
+          onClick={onOpenBoard}
+          className="flex-1 px-3 py-2 text-sm font-medium text-white bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors"
+        >
           Open Board
         </button>
       </div>
@@ -993,7 +1172,7 @@ const ScheduleProjectModal = ({ project, formData, setFormData, onClose, onSubmi
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-xl">
         <div className="flex items-center justify-between p-6 border-b border-gray-100">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900">Schedule Project</h2>
+            <h2 className="text-xl font-semibold text-gray-900">Update Deadline</h2>
             <p className="text-sm text-gray-500 mt-1 truncate">{project?.title}</p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg">
@@ -1003,7 +1182,7 @@ const ScheduleProjectModal = ({ project, formData, setFormData, onClose, onSubmi
 
         <form onSubmit={onSubmit} className="p-6 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Schedule Time</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Deadline</label>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <input
                 type="date"
@@ -1018,7 +1197,7 @@ const ScheduleProjectModal = ({ project, formData, setFormData, onClose, onSubmi
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
               />
             </div>
-            <p className="text-xs text-gray-500 mt-1">Scheduled projects stay hidden from Active until this time.</p>
+            <p className="text-xs text-gray-500 mt-1">Set or update the project deadline.</p>
           </div>
 
           <div className="flex gap-3 pt-2">
@@ -1033,7 +1212,7 @@ const ScheduleProjectModal = ({ project, formData, setFormData, onClose, onSubmi
               type="submit"
               className="flex-1 px-4 py-2 text-sm font-medium text-white bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors"
             >
-              Save Schedule
+              Save Deadline
             </button>
           </div>
         </form>
@@ -1042,7 +1221,17 @@ const ScheduleProjectModal = ({ project, formData, setFormData, onClose, onSubmi
   );
 };
 
-const CreateProjectModal = ({ isOpen, onClose, onSubmit, formData, setFormData, loading }) => {
+const CreateProjectModal = ({
+  isOpen,
+  onClose,
+  onSubmit,
+  formData,
+  setFormData,
+  loading,
+  titleText = 'Create New Project',
+  submitLabel = 'Create Project',
+  submitLoadingLabel = 'Creating...',
+}) => {
   if (!isOpen) return null;
 
   return (
@@ -1050,7 +1239,7 @@ const CreateProjectModal = ({ isOpen, onClose, onSubmit, formData, setFormData, 
       <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-900">Create New Project</h2>
+          <h2 className="text-lg font-semibold text-gray-900">{titleText}</h2>
           <button
             onClick={onClose}
             disabled={loading}
@@ -1092,7 +1281,7 @@ const CreateProjectModal = ({ isOpen, onClose, onSubmit, formData, setFormData, 
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Schedule Time
+              Deadline
             </label>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <input
@@ -1112,7 +1301,7 @@ const CreateProjectModal = ({ isOpen, onClose, onSubmit, formData, setFormData, 
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:bg-gray-50"
               />
             </div>
-            <p className="text-xs text-gray-500 mt-1">Pick a date and time to schedule this project.</p>
+            <p className="text-xs text-gray-500 mt-1">Pick an optional deadline for this project.</p>
           </div>
 
           {/* Buttons */}
@@ -1133,10 +1322,10 @@ const CreateProjectModal = ({ isOpen, onClose, onSubmit, formData, setFormData, 
               {loading ? (
                 <>
                   <Loader2 size={16} className="animate-spin" />
-                  Creating...
+                  {submitLoadingLabel}
                 </>
               ) : (
-                'Create Project'
+                submitLabel
               )}
             </button>
           </div>

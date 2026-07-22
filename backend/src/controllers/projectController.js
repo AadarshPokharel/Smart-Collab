@@ -1,50 +1,273 @@
 const Project = require('../models/Project');
 const Task = require('../models/Task');
 const User = require('../models/User');
-const { createNotification } = require('../services/notificationService');
+const { createNotification, createNotifications } = require('../services/notificationService');
+const {
+  getTaskStatsByProject,
+  serializeProjectSummary,
+  serializeProjectDetail,
+  toObjectIdString,
+} = require('../services/projectSummaryService');
 
-/**
- * Create new project
- * Any authenticated user can create projects
- */
+const isGlobalAdmin = (user) => user?.role === 'admin';
+
+const isProjectOwner = (project, userId) =>
+  toObjectIdString(project?.owner) === toObjectIdString(userId);
+
+const getProjectMemberRecord = (project, userId) => {
+  if (!project || !userId) return null;
+  const normalizedUserId = toObjectIdString(userId);
+  const members = Array.isArray(project.members) ? project.members : [];
+
+  return (
+    members.find((member) => toObjectIdString(member?.user) === normalizedUserId) || null
+  );
+};
+
+const isProjectMember = (project, userId) =>
+  isProjectOwner(project, userId) || !!getProjectMemberRecord(project, userId);
+
+const canAccessProject = (project, user) =>
+  isGlobalAdmin(user) || isProjectMember(project, user?._id);
+
+const canManageProject = (project, user) =>
+  isGlobalAdmin(user) || isProjectOwner(project, user?._id);
+
+const canCollaborateOnProject = (project, user) =>
+  canAccessProject(project, user);
+
+const normalizeFutureDate = (value, label = 'dueDate') => {
+  if (value === undefined) return { hasValue: false, date: undefined };
+  if (value === null || value === '') return { hasValue: true, date: null };
+
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) {
+    return { error: `Invalid ${label}` };
+  }
+
+  if (parsed.getTime() <= Date.now()) {
+    return { error: 'Schedule time must be in the future' };
+  }
+
+  return { hasValue: true, date: parsed };
+};
+
+const populateProjectRelations = async (project, { detail = false } = {}) => {
+  await project.populate('owner', 'firstName lastName email avatar');
+  await project.populate({
+    path: 'members.user',
+    select: 'firstName lastName email avatar',
+  });
+
+  if (detail) {
+    await project.populate({
+      path: 'meetings.createdBy',
+      select: 'firstName lastName email avatar',
+    });
+    await project.populate({
+      path: 'meetings.participants',
+      select: 'firstName lastName email avatar',
+    });
+    await project.populate({
+      path: 'sharedResources.uploadedBy',
+      select: 'firstName lastName email avatar',
+    });
+  }
+
+  return project;
+};
+
+const buildProjectPayload = async (project, { detail = false } = {}) => {
+  await populateProjectRelations(project, { detail });
+  const taskStatsByProject = await getTaskStatsByProject([project._id]);
+  const stats = taskStatsByProject.get(project._id.toString());
+
+  return detail
+    ? serializeProjectDetail(project, stats)
+    : serializeProjectSummary(project, stats);
+};
+
+const getProjectNotificationRecipients = async (
+  project,
+  { excludeUserId = null, preferenceKey = 'projectUpdates' } = {}
+) => {
+  const memberIds = new Set(
+    [
+      toObjectIdString(project?.owner),
+      ...(Array.isArray(project?.members) ? project.members.map((member) => toObjectIdString(member?.user)) : []),
+    ].filter(Boolean)
+  );
+
+  if (excludeUserId) {
+    memberIds.delete(toObjectIdString(excludeUserId));
+  }
+
+  if (memberIds.size === 0) {
+    return [];
+  }
+
+  const query = { _id: { $in: Array.from(memberIds) } };
+  if (preferenceKey) {
+    query[`preferences.notifications.${preferenceKey}`] = { $ne: false };
+  }
+
+  const users = await User.find(query).select('_id');
+  return users.map((user) => user._id);
+};
+
+const normalizeParticipantIds = (project, participants = []) => {
+  const nextIds = Array.isArray(participants) ? participants.map(toObjectIdString).filter(Boolean) : [];
+  const allowedIds = new Set([
+    toObjectIdString(project?.owner),
+    ...(Array.isArray(project?.members) ? project.members.map((member) => toObjectIdString(member?.user)) : []),
+  ]);
+
+  const uniqueParticipantIds = Array.from(new Set(nextIds));
+  const invalidParticipants = uniqueParticipantIds.filter((id) => !allowedIds.has(id));
+
+  return {
+    ids: uniqueParticipantIds.filter((id) => allowedIds.has(id)),
+    invalidParticipants,
+  };
+};
+
+const validateMeetingPayload = (payload = {}, { partial = false } = {}) => {
+  const errors = [];
+  const next = {};
+
+  if (!partial || payload.title !== undefined) {
+    const title = typeof payload.title === 'string' ? payload.title.trim() : '';
+    if (!title) {
+      errors.push('Meeting title is required');
+    } else {
+      next.title = title;
+    }
+  }
+
+  if (!partial || payload.scheduledFor !== undefined) {
+    const scheduled = normalizeFutureDate(payload.scheduledFor, 'scheduledFor');
+    if (scheduled.error) {
+      errors.push(scheduled.error);
+    } else {
+      next.scheduledFor = scheduled.date;
+    }
+  }
+
+  if (payload.description !== undefined) {
+    next.description = typeof payload.description === 'string' ? payload.description.trim() : '';
+  } else if (!partial) {
+    next.description = '';
+  }
+
+  if (payload.meetingLink !== undefined) {
+    next.meetingLink = typeof payload.meetingLink === 'string' ? payload.meetingLink.trim() : '';
+  } else if (!partial) {
+    next.meetingLink = '';
+  }
+
+  if (payload.timezone !== undefined) {
+    next.timezone = typeof payload.timezone === 'string' && payload.timezone.trim()
+      ? payload.timezone.trim()
+      : null;
+  } else if (!partial) {
+    next.timezone = null;
+  }
+
+  if (payload.status !== undefined) {
+    if (!['Scheduled', 'Completed', 'Cancelled'].includes(payload.status)) {
+      errors.push('Invalid meeting status');
+    } else {
+      next.status = payload.status;
+    }
+  } else if (!partial) {
+    next.status = 'Scheduled';
+  }
+
+  if (payload.participants !== undefined) {
+    next.participants = payload.participants;
+  }
+
+  return { errors, next };
+};
+
+const validateResourcePayload = (payload = {}, { partial = false } = {}) => {
+  const errors = [];
+  const next = {};
+
+  if (!partial || payload.title !== undefined) {
+    const title = typeof payload.title === 'string' ? payload.title.trim() : '';
+    if (!title) {
+      errors.push('Resource title is required');
+    } else {
+      next.title = title;
+    }
+  }
+
+  if (!partial || payload.url !== undefined) {
+    const url = typeof payload.url === 'string' ? payload.url.trim() : '';
+    if (!url) {
+      errors.push('Resource URL is required');
+    } else {
+      next.url = url;
+    }
+  }
+
+  if (payload.description !== undefined) {
+    next.description = typeof payload.description === 'string' ? payload.description.trim() : '';
+  } else if (!partial) {
+    next.description = '';
+  }
+
+  if (payload.type !== undefined) {
+    if (!['link', 'file'].includes(payload.type)) {
+      errors.push('Invalid resource type');
+    } else {
+      next.type = payload.type;
+    }
+  } else if (!partial) {
+    next.type = 'link';
+  }
+
+  return { errors, next };
+};
+
+const getMeetingEntry = (project, meetingId) => project?.meetings?.id(meetingId) || null;
+
+const getResourceEntry = (project, resourceId) => project?.sharedResources?.id(resourceId) || null;
+
+const canManageMeeting = (project, meeting, user) =>
+  canManageProject(project, user) || toObjectIdString(meeting?.createdBy) === toObjectIdString(user?._id);
+
+const canManageResource = (project, resource, user) =>
+  canManageProject(project, user) || toObjectIdString(resource?.uploadedBy) === toObjectIdString(user?._id);
+
 exports.createProject = async (req, res) => {
   try {
-    // RBAC: Allow any authenticated user to create projects
-
     const { title, description, status, dueDate, dueTimezone } = req.body;
-    const nextStatus = ['Active', 'Archived'].includes(status) ? status : 'Active';
+    const normalizedTitle = typeof title === 'string' ? title.trim() : '';
 
-    let parsedDueDate = null;
-    if (dueDate !== undefined && dueDate !== null && dueDate !== '') {
-      parsedDueDate = new Date(dueDate);
-      const ms = parsedDueDate.getTime();
-      if (!Number.isFinite(ms)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid dueDate',
-        });
-      }
-      if (ms <= Date.now()) {
-        return res.status(400).json({
-          success: false,
-          message: 'Schedule time must be in the future',
-        });
-      }
-    }
-
-    if (!title) {
+    if (!normalizedTitle) {
       return res.status(400).json({
         success: false,
         message: 'Project title is required',
       });
     }
 
+    const nextStatus = ['Active', 'Archived'].includes(status) ? status : 'Active';
+    const parsedDueDate = normalizeFutureDate(dueDate);
+    if (parsedDueDate.error) {
+      return res.status(400).json({
+        success: false,
+        message: parsedDueDate.error,
+      });
+    }
+
     const project = await Project.create({
-      title,
-      description: description || '',
+      title: normalizedTitle,
+      description: typeof description === 'string' ? description.trim() : '',
       status: nextStatus,
       owner: req.user._id,
-      dueDate: parsedDueDate,
+      dueDate: parsedDueDate.hasValue ? parsedDueDate.date : null,
       dueTimezone: typeof dueTimezone === 'string' && dueTimezone.trim() ? dueTimezone.trim() : null,
       members: [
         {
@@ -54,49 +277,26 @@ exports.createProject = async (req, res) => {
       ],
     });
 
-    await project.populate('owner', 'firstName lastName email avatar');
-    await project.populate({
-      path: 'members.user',
-      select: 'firstName lastName email avatar',
-    });
+    const payload = await buildProjectPayload(project, { detail: true });
 
-    if (project.owner.toString() !== req.user._id.toString()) {
-      await createNotification({
-        user: project.owner,
-        type: 'Info',
-        title: 'Project created',
-        message: `Project “${project.title}” was created.`,
-        entityType: 'Project',
-        entityId: project._id,
-      });
-    }
-
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      data: project,
+      data: payload,
       message: 'Project created successfully',
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: error.message,
     });
   }
 };
 
-/**
- * Get all projects for authenticated user
- * Returns projects where user is owner or member
- */
 exports.getProjects = async (req, res) => {
   try {
-    const query = req.user?.role === 'admin'
-      ? {}
-      : {
-          $or: [{ owner: req.user._id }, { 'members.user': req.user._id }],
-        };
-
-    const projects = await Project.find(query)
+    const projects = await Project.find({
+      $or: [{ owner: req.user._id }, { 'members.user': req.user._id }],
+    })
       .populate('owner', 'firstName lastName email avatar')
       .populate({
         path: 'members.user',
@@ -104,30 +304,26 @@ exports.getProjects = async (req, res) => {
       })
       .sort({ createdAt: -1 });
 
-    res.status(200).json({
+    const taskStatsByProject = await getTaskStatsByProject(projects.map((project) => project._id));
+    const payload = projects.map((project) =>
+      serializeProjectSummary(project, taskStatsByProject.get(project._id.toString()))
+    );
+
+    return res.status(200).json({
       success: true,
-      data: projects,
+      data: payload,
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: error.message,
     });
   }
 };
 
-/**
- * Get project by ID
- * Check access: user must be owner or member
- */
 exports.getProjectById = async (req, res) => {
   try {
-    const project = await Project.findById(req.params.id)
-      .populate('owner', 'firstName lastName email avatar')
-      .populate({
-        path: 'members.user',
-        select: 'firstName lastName email avatar',
-      });
+    const project = await Project.findById(req.params.id);
 
     if (!project) {
       return res.status(404).json({
@@ -136,36 +332,27 @@ exports.getProjectById = async (req, res) => {
       });
     }
 
-    // Check if user is owner or member
-    const isAuthorized =
-      project.owner._id.toString() === req.user._id.toString() ||
-      project.members.some(
-        (m) => m.user._id.toString() === req.user._id.toString()
-      );
-
-    if (!isAuthorized) {
+    if (!canAccessProject(project, req.user)) {
       return res.status(403).json({
         success: false,
         message: 'Not authorized to access this project',
       });
     }
 
-    res.status(200).json({
+    const payload = await buildProjectPayload(project, { detail: true });
+
+    return res.status(200).json({
       success: true,
-      data: project,
+      data: payload,
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: error.message,
     });
   }
 };
 
-/**
- * Update project
- * Only owner can update
- */
 exports.updateProject = async (req, res) => {
   try {
     const project = await Project.findById(req.params.id);
@@ -177,8 +364,7 @@ exports.updateProject = async (req, res) => {
       });
     }
 
-    // RBAC: Only owner can update
-    if (project.owner.toString() !== req.user._id.toString()) {
+    if (!canManageProject(project, req.user)) {
       return res.status(403).json({
         success: false,
         message: 'Only project owner can update project',
@@ -186,30 +372,45 @@ exports.updateProject = async (req, res) => {
     }
 
     const { title, description, status, milestones, dueDate, dueTimezone } = req.body;
-    if (title) project.title = title;
-    if (description !== undefined) project.description = description;
-    if (status) project.status = status;
-    if (milestones) project.milestones = milestones;
-    if (dueDate !== undefined) {
-      if (dueDate === null || dueDate === '') {
-        project.dueDate = null;
-      } else {
-        const parsed = new Date(dueDate);
-        const ms = parsed.getTime();
-        if (!Number.isFinite(ms)) {
-          return res.status(400).json({
-            success: false,
-            message: 'Invalid dueDate',
-          });
-        }
-        if (ms <= Date.now()) {
-          return res.status(400).json({
-            success: false,
-            message: 'Schedule time must be in the future',
-          });
-        }
-        project.dueDate = parsed;
+
+    if (title !== undefined) {
+      const normalizedTitle = typeof title === 'string' ? title.trim() : '';
+      if (!normalizedTitle) {
+        return res.status(400).json({
+          success: false,
+          message: 'Project title is required',
+        });
       }
+      project.title = normalizedTitle;
+    }
+
+    if (description !== undefined) {
+      project.description = typeof description === 'string' ? description.trim() : '';
+    }
+
+    if (status !== undefined) {
+      if (!['Active', 'Archived'].includes(status)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid project status',
+        });
+      }
+      project.status = status;
+    }
+
+    if (milestones !== undefined) {
+      project.milestones = Array.isArray(milestones) ? milestones : [];
+    }
+
+    const parsedDueDate = normalizeFutureDate(dueDate);
+    if (parsedDueDate.error) {
+      return res.status(400).json({
+        success: false,
+        message: parsedDueDate.error,
+      });
+    }
+    if (parsedDueDate.hasValue) {
+      project.dueDate = parsedDueDate.date;
     }
 
     if (dueTimezone !== undefined) {
@@ -217,29 +418,21 @@ exports.updateProject = async (req, res) => {
     }
 
     await project.save();
-    await project.populate('owner', 'firstName lastName email avatar');
-    await project.populate({
-      path: 'members.user',
-      select: 'firstName lastName email avatar',
-    });
+    const payload = await buildProjectPayload(project, { detail: true });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      data: project,
+      data: payload,
       message: 'Project updated successfully',
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: error.message,
     });
   }
 };
 
-/**
- * Delete project
- * Only owner can delete, also deletes all tasks
- */
 exports.deleteProject = async (req, res) => {
   try {
     const project = await Project.findById(req.params.id);
@@ -251,40 +444,31 @@ exports.deleteProject = async (req, res) => {
       });
     }
 
-    // RBAC: Only owner can delete
-    if (project.owner.toString() !== req.user._id.toString()) {
+    if (!canManageProject(project, req.user)) {
       return res.status(403).json({
         success: false,
         message: 'Only project owner can delete project',
       });
     }
 
-    // Delete all tasks in project
     await Task.deleteMany({ project: req.params.id });
-
     await Project.findByIdAndDelete(req.params.id);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: 'Project deleted successfully',
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: error.message,
     });
   }
 };
 
-/**
- * Invite member to project
- * Only owner can invite members
- * POST /api/projects/:id/invite { email, role }
- */
 exports.inviteMember = async (req, res) => {
   try {
     const { userId, email, role = 'Member' } = req.body;
-
     const project = await Project.findById(req.params.id);
 
     if (!project) {
@@ -294,8 +478,7 @@ exports.inviteMember = async (req, res) => {
       });
     }
 
-    // RBAC: Only owner can invite
-    if (project.owner.toString() !== req.user._id.toString()) {
+    if (!canManageProject(project, req.user)) {
       return res.status(403).json({
         success: false,
         message: 'Only project owner can invite members',
@@ -318,11 +501,8 @@ exports.inviteMember = async (req, res) => {
       });
     }
 
-    // Check if already member
-    const isMember = project.members.some(
-      (m) => m.user.toString() === invitedUser._id.toString()
-    );
-    if (isMember) {
+    const isAlreadyMember = isProjectMember(project, invitedUser._id);
+    if (isAlreadyMember) {
       return res.status(400).json({
         success: false,
         message: 'User is already a member',
@@ -334,11 +514,6 @@ exports.inviteMember = async (req, res) => {
       role,
     });
     await project.save();
-    await project.populate('owner', 'firstName lastName email avatar');
-    await project.populate({
-      path: 'members.user',
-      select: 'firstName lastName email avatar',
-    });
 
     await createNotification({
       user: invitedUser._id,
@@ -350,29 +525,25 @@ exports.inviteMember = async (req, res) => {
       metadata: { projectId: project._id.toString(), role },
     });
 
-    res.status(200).json({
+    const payload = await buildProjectPayload(project, { detail: true });
+
+    return res.status(200).json({
       success: true,
-      data: project,
+      data: payload,
       message: 'Member invited successfully',
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: error.message,
     });
   }
 };
 
-/**
- * Remove member from project
- * Only owner can remove members
- */
 exports.removeMember = async (req, res) => {
   try {
-    const { memberId } = req.body;
-    const projectId = req.params.id;
-
-    const project = await Project.findById(projectId);
+    const project = await Project.findById(req.params.id);
+    const memberId = req.params.memberId || req.body?.memberId;
 
     if (!project) {
       return res.status(404).json({
@@ -381,24 +552,17 @@ exports.removeMember = async (req, res) => {
       });
     }
 
-    // RBAC: Only owner can remove members
-    if (project.owner.toString() !== req.user._id.toString()) {
+    if (!canManageProject(project, req.user)) {
       return res.status(403).json({
         success: false,
         message: 'Only project owner can remove members',
       });
     }
 
-    // Remove member
     project.members = project.members.filter(
-      (m) => m.user.toString() !== memberId
+      (member) => toObjectIdString(member.user) !== toObjectIdString(memberId)
     );
     await project.save();
-    await project.populate('owner', 'firstName lastName email avatar');
-    await project.populate({
-      path: 'members.user',
-      select: 'firstName lastName email avatar',
-    });
 
     await createNotification({
       user: memberId,
@@ -409,13 +573,378 @@ exports.removeMember = async (req, res) => {
       entityId: project._id,
     });
 
-    res.status(200).json({
+    const payload = await buildProjectPayload(project, { detail: true });
+
+    return res.status(200).json({
       success: true,
-      data: project,
+      data: payload,
       message: 'Member removed successfully',
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.addMeeting = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found',
+      });
+    }
+
+    if (!canCollaborateOnProject(project, req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to add meetings to this project',
+      });
+    }
+
+    const { errors, next } = validateMeetingPayload(req.body);
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: errors[0],
+      });
+    }
+
+    const { ids: participantIds, invalidParticipants } = normalizeParticipantIds(
+      project,
+      next.participants
+    );
+    if (invalidParticipants.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Meeting participants must belong to the project',
+      });
+    }
+
+    project.meetings.push({
+      title: next.title,
+      description: next.description,
+      meetingLink: next.meetingLink,
+      scheduledFor: next.scheduledFor,
+      timezone: next.timezone,
+      participants: participantIds,
+      createdBy: req.user._id,
+      status: next.status,
+    });
+
+    await project.save();
+
+    const recipientIds = participantIds.length
+      ? participantIds.filter((participantId) => participantId !== req.user._id.toString())
+      : (await getProjectNotificationRecipients(project, { excludeUserId: req.user._id }));
+
+    if (recipientIds.length > 0) {
+      await createNotifications(
+        recipientIds.map((userId) => ({
+          user: userId,
+          type: 'ProjectUpdate',
+          title: 'Meeting scheduled',
+          message: `A new meeting “${next.title}” was scheduled in “${project.title}”.`,
+          entityType: 'Project',
+          entityId: project._id,
+          metadata: { projectId: project._id.toString(), feature: 'meeting' },
+        }))
+      );
+    }
+
+    const payload = await buildProjectPayload(project, { detail: true });
+
+    return res.status(201).json({
+      success: true,
+      data: payload,
+      message: 'Meeting added successfully',
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.updateMeeting = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found',
+      });
+    }
+
+    const meeting = getMeetingEntry(project, req.params.meetingId);
+    if (!meeting) {
+      return res.status(404).json({
+        success: false,
+        message: 'Meeting not found',
+      });
+    }
+
+    if (!canManageMeeting(project, meeting, req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to update this meeting',
+      });
+    }
+
+    const { errors, next } = validateMeetingPayload(req.body, { partial: true });
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: errors[0],
+      });
+    }
+
+    if (next.participants !== undefined) {
+      const { ids: participantIds, invalidParticipants } = normalizeParticipantIds(
+        project,
+        next.participants
+      );
+      if (invalidParticipants.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Meeting participants must belong to the project',
+        });
+      }
+      meeting.participants = participantIds;
+    }
+
+    if (next.title !== undefined) meeting.title = next.title;
+    if (next.description !== undefined) meeting.description = next.description;
+    if (next.meetingLink !== undefined) meeting.meetingLink = next.meetingLink;
+    if (next.scheduledFor !== undefined) meeting.scheduledFor = next.scheduledFor;
+    if (next.timezone !== undefined) meeting.timezone = next.timezone;
+    if (next.status !== undefined) meeting.status = next.status;
+
+    await project.save();
+    const payload = await buildProjectPayload(project, { detail: true });
+
+    return res.status(200).json({
+      success: true,
+      data: payload,
+      message: 'Meeting updated successfully',
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.deleteMeeting = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found',
+      });
+    }
+
+    const meeting = getMeetingEntry(project, req.params.meetingId);
+    if (!meeting) {
+      return res.status(404).json({
+        success: false,
+        message: 'Meeting not found',
+      });
+    }
+
+    if (!canManageMeeting(project, meeting, req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to delete this meeting',
+      });
+    }
+
+    meeting.deleteOne();
+    await project.save();
+
+    const payload = await buildProjectPayload(project, { detail: true });
+
+    return res.status(200).json({
+      success: true,
+      data: payload,
+      message: 'Meeting deleted successfully',
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.addResource = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found',
+      });
+    }
+
+    if (!canCollaborateOnProject(project, req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to add resources to this project',
+      });
+    }
+
+    const { errors, next } = validateResourcePayload(req.body);
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: errors[0],
+      });
+    }
+
+    project.sharedResources.push({
+      title: next.title,
+      description: next.description,
+      type: next.type,
+      url: next.url,
+      uploadedBy: req.user._id,
+    });
+
+    await project.save();
+
+    const recipientIds = await getProjectNotificationRecipients(project, { excludeUserId: req.user._id });
+    if (recipientIds.length > 0) {
+      await createNotifications(
+        recipientIds.map((userId) => ({
+          user: userId,
+          type: 'ProjectUpdate',
+          title: 'Resource shared',
+          message: `A new ${next.type} resource “${next.title}” was shared in “${project.title}”.`,
+          entityType: 'Project',
+          entityId: project._id,
+          metadata: { projectId: project._id.toString(), feature: 'resource' },
+        }))
+      );
+    }
+
+    const payload = await buildProjectPayload(project, { detail: true });
+
+    return res.status(201).json({
+      success: true,
+      data: payload,
+      message: 'Resource shared successfully',
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.updateResource = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found',
+      });
+    }
+
+    const resource = getResourceEntry(project, req.params.resourceId);
+    if (!resource) {
+      return res.status(404).json({
+        success: false,
+        message: 'Resource not found',
+      });
+    }
+
+    if (!canManageResource(project, resource, req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to update this resource',
+      });
+    }
+
+    const { errors, next } = validateResourcePayload(req.body, { partial: true });
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: errors[0],
+      });
+    }
+
+    if (next.title !== undefined) resource.title = next.title;
+    if (next.description !== undefined) resource.description = next.description;
+    if (next.type !== undefined) resource.type = next.type;
+    if (next.url !== undefined) resource.url = next.url;
+
+    await project.save();
+    const payload = await buildProjectPayload(project, { detail: true });
+
+    return res.status(200).json({
+      success: true,
+      data: payload,
+      message: 'Resource updated successfully',
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.deleteResource = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found',
+      });
+    }
+
+    const resource = getResourceEntry(project, req.params.resourceId);
+    if (!resource) {
+      return res.status(404).json({
+        success: false,
+        message: 'Resource not found',
+      });
+    }
+
+    if (!canManageResource(project, resource, req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to delete this resource',
+      });
+    }
+
+    resource.deleteOne();
+    await project.save();
+
+    const payload = await buildProjectPayload(project, { detail: true });
+
+    return res.status(200).json({
+      success: true,
+      data: payload,
+      message: 'Resource deleted successfully',
+    });
+  } catch (error) {
+    return res.status(500).json({
       success: false,
       message: error.message,
     });

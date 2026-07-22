@@ -61,8 +61,14 @@ export const normalizeNotifications = (responseData) => {
   return list.map((item, index) => ({
     id: item?.id || item?._id || `${index}`,
     type: item?.type || 'Info',
+    title: item?.title || coerceText(item),
+    message: item?.message || item?.text || item?.title || 'Notification',
     text: coerceText(item),
     time: coerceTimeLabel(item),
     read: !!item?.read,
+    timestamp: item?.timestamp || item?.createdAt || null,
+    entityType: item?.entityType || null,
+    entityId: item?.entityId || null,
+    metadata: item?.metadata || {},
   }));
 };

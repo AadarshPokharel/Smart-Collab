@@ -29,7 +29,8 @@ const NotificationDropdown = ({
         ) : (
           notifications.map((note, index) => {
             const isRead = !!note?.read;
-            const text = note?.text || note?.message || note?.title || 'Notification';
+            const title = note?.title || note?.text || note?.message || 'Notification';
+            const message = note?.message || note?.text || title;
             const time =
               note?.time ||
               (note?.createdAt
@@ -50,7 +51,10 @@ const NotificationDropdown = ({
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-slate-700 font-medium">{text}</p>
+                    <p className="text-slate-700 font-medium">{title}</p>
+                    {message && message !== title ? (
+                      <p className="mt-1 text-xs leading-5 text-slate-500">{message}</p>
+                    ) : null}
                     {time && <p className="text-xs text-slate-500 mt-2">{time}</p>}
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">

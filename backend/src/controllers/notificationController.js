@@ -1,4 +1,5 @@
 const Notification = require('../models/Notification');
+const { syncDeadlineReminderNotificationsForUser } = require('../services/notificationService');
 
 const formatNotification = (notification) => ({
   id: notification._id,
@@ -11,10 +12,13 @@ const formatNotification = (notification) => ({
   read: !!notification.read,
   entityType: notification.entityType || null,
   entityId: notification.entityId || null,
+  metadata: notification.metadata || {},
 });
 
 exports.getNotifications = async (req, res) => {
   try {
+    await syncDeadlineReminderNotificationsForUser(req.user);
+
     const notifications = await Notification.find({ user: req.user._id })
       .sort({ createdAt: -1 })
       .limit(50);
@@ -25,6 +29,35 @@ exports.getNotifications = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+};
+
+exports.updateNotificationReadState = async (req, res) => {
+  try {
+    const nextReadState = req.body?.read !== false;
+
+    const notification = await Notification.findOneAndUpdate(
+      { _id: req.params.id, user: req.user._id },
+      { read: nextReadState },
+      { new: true }
+    );
+
+    if (!notification) {
+      return res.status(404).json({
+        success: false,
+        error: 'Notification not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      notification: formatNotification(notification),
+    });
+  } catch (error) {
+    return res.status(500).json({
       success: false,
       error: error.message,
     });

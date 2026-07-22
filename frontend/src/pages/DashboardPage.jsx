@@ -6,16 +6,19 @@ import NotificationDropdown from '../components/NotificationDropdown';
 import {
   Bell,
   Calendar,
+  CalendarClock,
   CalendarDays,
   CheckSquare,
   ChevronDown,
   Clock,
   AlertTriangle,
   FolderKanban,
+  Link2,
   LayoutGrid,
   LogOut,
   Menu,
   MessageSquare,
+  Plus,
   Search,
   Settings,
   ArrowUpRight,
@@ -192,6 +195,9 @@ const DashboardPage = () => {
   const [tasks, setTasks] = useState([]);
   const [projects, setProjects] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [activity, setActivity] = useState([]);
+  const [upcomingMeetings, setUpcomingMeetings] = useState([]);
+  const [recentResources, setRecentResources] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedTask, setSelectedTask] = useState(null);
 
@@ -368,11 +374,17 @@ const DashboardPage = () => {
       setTasks(Array.isArray(dashboard.tasks) ? dashboard.tasks : []);
       setProjects(Array.isArray(dashboard.projects) ? dashboard.projects : []);
       setNotifications(Array.isArray(dashboard.notifications) ? dashboard.notifications : []);
+      setActivity(Array.isArray(dashboard.activity) ? dashboard.activity : []);
+      setUpcomingMeetings(Array.isArray(dashboard.upcomingMeetings) ? dashboard.upcomingMeetings : []);
+      setRecentResources(Array.isArray(dashboard.recentResources) ? dashboard.recentResources : []);
     } catch (error) {
       console.error('Failed to load dashboard:', error);
       setTasks([]);
       setProjects([]);
       setNotifications([]);
+      setActivity([]);
+      setUpcomingMeetings([]);
+      setRecentResources([]);
     }
   };
 
@@ -650,6 +662,121 @@ const DashboardPage = () => {
                   )}
                 </div>
               </aside>
+            </section>
+
+            <section className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+              <section className="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm">
+                <div className="mb-5 flex items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg font-semibold text-slate-900">Upcoming Meetings</h2>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Collaboration links and checkpoints coming up next.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => navigate('/projects')}
+                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                  >
+                    <Plus size={15} />
+                    Add
+                  </button>
+                </div>
+
+                {upcomingMeetings.length === 0 ? (
+                  <div className="flex min-h-[220px] items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center text-sm text-slate-500">
+                    No meetings scheduled yet.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {upcomingMeetings.map((meeting) => (
+                      <button
+                        key={meeting.id || `${meeting.projectId}-${meeting.scheduledFor}`}
+                        onClick={() => navigate(`/projects/${meeting.projectId}?tab=collaboration`)}
+                        className="w-full rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-left transition hover:border-violet-200 hover:bg-slate-50"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <CalendarClock size={16} className="text-violet-600" />
+                              <p className="text-sm font-semibold text-slate-900">{meeting.title}</p>
+                            </div>
+                            <p className="mt-1 text-xs text-slate-500">{meeting.projectTitle}</p>
+                            <p className="mt-2 text-sm text-slate-600">{formatDateLabel(meeting.scheduledFor, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</p>
+                          </div>
+                          <ArrowUpRight size={16} className="mt-1 text-slate-400" />
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm">
+                <div className="mb-5">
+                  <h2 className="text-lg font-semibold text-slate-900">Recent Activity</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Recent changes across your projects and task flow.
+                  </p>
+                </div>
+
+                {activity.length === 0 ? (
+                  <div className="flex min-h-[220px] items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center text-sm text-slate-500">
+                    No recent activity yet.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {activity.map((entry) => (
+                      <button
+                        key={entry.id}
+                        onClick={() => handleOpenProject(entry.projectId)}
+                        className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-left transition hover:border-violet-200 hover:bg-slate-50"
+                      >
+                        <p className="text-sm font-semibold text-slate-900">{entry.text}</p>
+                        <p className="mt-2 text-xs text-slate-500">{entry.time}</p>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </section>
+
+            <section className="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm">
+              <div className="mb-5">
+                <h2 className="text-lg font-semibold text-slate-900">Recent Shared Resources</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Links and file metadata recently added to your project workspaces.
+                </p>
+              </div>
+
+              {recentResources.length === 0 ? (
+                <div className="flex min-h-[180px] items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center text-sm text-slate-500">
+                  No shared resources yet.
+                </div>
+              ) : (
+                <div className="grid gap-4 lg:grid-cols-3">
+                  {recentResources.map((resource) => (
+                    <button
+                      key={resource.id || `${resource.projectId}-${resource.createdAt}`}
+                      onClick={() => navigate(`/projects/${resource.projectId}?tab=collaboration`)}
+                      className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 text-left transition hover:border-violet-200 hover:bg-slate-50"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <Link2 size={15} className="text-violet-600" />
+                            <p className="truncate text-sm font-semibold text-slate-900">{resource.title}</p>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-500">{resource.projectTitle}</p>
+                          {resource.description ? (
+                            <p className="mt-3 text-sm text-slate-600 line-clamp-2">{resource.description}</p>
+                          ) : null}
+                        </div>
+                        <ArrowUpRight size={16} className="mt-1 text-slate-400" />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </section>
           </main>
         </div>

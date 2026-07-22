@@ -1,5 +1,7 @@
 const Message = require('../models/Message');
 const Project = require('../models/Project');
+const User = require('../models/User');
+const { createNotifications } = require('../services/notificationService');
 
 const toObjectIdString = (value) => {
   if (!value) return '';
@@ -54,6 +56,21 @@ const formatMessage = (message, userId) => ({
   ...message.toObject(),
   read: hasUserReadMessage(message, userId),
 });
+
+const getProjectRecipientIds = (project, excludeUserId) => {
+  const uniqueIds = new Set([
+    toObjectIdString(project?.owner),
+    ...(Array.isArray(project?.members)
+      ? project.members.map((member) => toObjectIdString(member?.user))
+      : []),
+  ]);
+
+  if (excludeUserId) {
+    uniqueIds.delete(toObjectIdString(excludeUserId));
+  }
+
+  return Array.from(uniqueIds).filter(Boolean);
+};
 
 const markProjectMessagesAsRead = async (projectId, userId) => {
   await Message.updateMany(
@@ -174,6 +191,34 @@ exports.sendMessage = async (req, res) => {
     await message.save();
     await message.populate('sender', 'firstName lastName email avatar');
 
+    const recipientIds = getProjectRecipientIds(project, req.user._id);
+    if (recipientIds.length > 0) {
+      const recipients = await User.find({
+        _id: { $in: recipientIds },
+        'preferences.notifications.messageNotifications': { $ne: false },
+      }).select('_id');
+
+      if (recipients.length > 0) {
+        const senderName =
+          `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.email || 'A teammate';
+
+        await createNotifications(
+          recipients.map((recipient) => ({
+            user: recipient._id,
+            type: 'NewMessage',
+            title: `New message in ${project.title}`,
+            message: `${senderName}: ${content.trim().slice(0, 140)}`,
+            entityType: 'Project',
+            entityId: project._id,
+            metadata: {
+              projectId: project._id.toString(),
+              messageId: message._id.toString(),
+            },
+          }))
+        );
+      }
+    }
+
     return res.status(201).json({
       success: true,
       data: formatMessage(message, req.user._id),
@@ -227,10 +272,29 @@ exports.getConversations = async (req, res) => {
           projectId: project._id,
           title: project.title,
           membersCount: uniqueMemberIds.size,
+          membersPreview: [
+            project.owner,
+            ...members.map((member) => member?.user).filter(Boolean),
+          ]
+            .filter(Boolean)
+            .slice(0, 4)
+            .map((member) => ({
+              _id: member._id,
+              firstName: member.firstName || '',
+              lastName: member.lastName || '',
+              avatar: member.avatar || null,
+            })),
           latestMessage: latestMessage?.content || null,
           latestMessageTime: latestMessage?.createdAt || project.createdAt,
           latestMessageSender: latestMessage?.sender || null,
           unreadCount,
+          meetingsCount: Array.isArray(project.meetings) ? project.meetings.length : 0,
+          sharedResourcesCount: Array.isArray(project.sharedResources) ? project.sharedResources.length : 0,
+          nextMeeting:
+            (Array.isArray(project.meetings) ? project.meetings : [])
+              .filter((meeting) => meeting?.scheduledFor && meeting?.status !== 'Cancelled')
+              .sort((left, right) => new Date(left.scheduledFor) - new Date(right.scheduledFor))
+              .find((meeting) => new Date(meeting.scheduledFor).getTime() >= Date.now()) || null,
         };
       })
     );

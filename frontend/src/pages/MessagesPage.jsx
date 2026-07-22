@@ -3,7 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowLeft,
+  CalendarClock,
   Clock3,
+  ExternalLink,
+  Link2,
   Loader2,
   MessageSquare,
   RefreshCcw,
@@ -91,6 +94,7 @@ export default function MessagesPage() {
   const [conversationError, setConversationError] = useState('');
   const [messageError, setMessageError] = useState('');
   const [notifications, setNotifications] = useState([]);
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const messagesEndRef = useRef(null);
 
   const handleLogout = () => {
@@ -186,6 +190,7 @@ export default function MessagesPage() {
         const nextConversations = Array.isArray(response.data?.data) ? response.data.data : [];
 
         setConversations(nextConversations);
+        setLastSyncedAt(new Date().toISOString());
         setSelectedProjectId((currentProjectId) => {
           if (!nextConversations.length) return '';
           if (currentProjectId && nextConversations.some((item) => item.projectId === currentProjectId)) {
@@ -424,7 +429,7 @@ export default function MessagesPage() {
               </p>
             </div>
           ) : (
-            <div className="max-h-[720px] flex-1 space-y-2 overflow-y-auto p-3">
+              <div className="max-h-[720px] flex-1 space-y-2 overflow-y-auto p-3">
               {filteredConversations.map((conversation) => {
                 const isActive = conversation.projectId === selectedProjectId;
 
@@ -447,6 +452,20 @@ export default function MessagesPage() {
                           <Users size={12} />
                           {conversation.membersCount} member{conversation.membersCount !== 1 ? 's' : ''}
                         </p>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          {conversation.nextMeeting?.scheduledFor ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-700">
+                              <CalendarClock size={12} />
+                              {formatRelativeTime(conversation.nextMeeting.scheduledFor)}
+                            </span>
+                          ) : null}
+                          {conversation.sharedResourcesCount > 0 ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                              <Link2 size={12} />
+                              {conversation.sharedResourcesCount} resource{conversation.sharedResourcesCount === 1 ? '' : 's'}
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
 
                       <div className="flex flex-col items-end gap-2">
@@ -510,11 +529,54 @@ export default function MessagesPage() {
                           <Clock3 size={14} />
                           Last active {formatRelativeTime(selectedConversation.latestMessageTime)}
                         </span>
+                        {lastSyncedAt ? (
+                          <span className="inline-flex items-center gap-1">
+                            <RefreshCcw size={14} />
+                            Synced {formatRelativeTime(lastSyncedAt)}
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
+
+              {(selectedConversation.nextMeeting || selectedConversation.sharedResourcesCount > 0) && (
+                <div className="border-b border-slate-200 bg-slate-50/80 px-5 py-4">
+                  <div className="flex flex-wrap gap-3">
+                    {selectedConversation.nextMeeting?.scheduledFor ? (
+                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+                        <p className="font-semibold text-slate-900">
+                          Next meeting: {selectedConversation.nextMeeting.title}
+                        </p>
+                        <p className="mt-1">
+                          {formatMessageTime(selectedConversation.nextMeeting.scheduledFor)}
+                        </p>
+                        {selectedConversation.nextMeeting.meetingLink ? (
+                          <a
+                            href={selectedConversation.nextMeeting.meetingLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-violet-600 hover:text-violet-700"
+                          >
+                            Open meeting link
+                            <ExternalLink size={12} />
+                          </a>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {selectedConversation.sharedResourcesCount > 0 ? (
+                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+                        <p className="font-semibold text-slate-900">Shared resources</p>
+                        <p className="mt-1">
+                          {selectedConversation.sharedResourcesCount} file/link item
+                          {selectedConversation.sharedResourcesCount === 1 ? '' : 's'} connected to this project.
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              )}
 
               {messageError && (
                 <div className="border-b border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-700">

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const {
   getNotifications,
+  updateNotificationReadState,
   markNotificationRead,
   markAllNotificationsRead,
   deleteNotification,
@@ -13,6 +14,7 @@ router.use(authMiddleware);
 
 router.get('/', getNotifications);
 router.patch('/read-all', markAllNotificationsRead);
+router.patch('/:id', updateNotificationReadState);
 router.patch('/:id/read', markNotificationRead);
 router.delete('/clear-all', clearNotifications);
 router.delete('/:id', deleteNotification);

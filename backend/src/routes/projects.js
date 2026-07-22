@@ -8,6 +8,12 @@ const {
   deleteProject,
   inviteMember,
   removeMember,
+  addMeeting,
+  updateMeeting,
+  deleteMeeting,
+  addResource,
+  updateResource,
+  deleteResource,
 } = require('../controllers/projectController');
 const { authMiddleware } = require('../middleware/auth');
 
@@ -39,5 +45,23 @@ router.post('/:id/invite', inviteMember);
 
 // DELETE /api/projects/:id/members/:memberId - Remove member (owner only)
 router.delete('/:id/members/:memberId', removeMember);
+
+// POST   /api/projects/:id/meetings              - Add meeting to project
+router.post('/:id/meetings', addMeeting);
+
+// PUT    /api/projects/:id/meetings/:meetingId   - Update meeting
+router.put('/:id/meetings/:meetingId', updateMeeting);
+
+// DELETE /api/projects/:id/meetings/:meetingId   - Delete meeting
+router.delete('/:id/meetings/:meetingId', deleteMeeting);
+
+// POST   /api/projects/:id/resources             - Share project resource
+router.post('/:id/resources', addResource);
+
+// PUT    /api/projects/:id/resources/:resourceId - Update project resource
+router.put('/:id/resources/:resourceId', updateResource);
+
+// DELETE /api/projects/:id/resources/:resourceId - Delete project resource
+router.delete('/:id/resources/:resourceId', deleteResource);
 
 module.exports = router;

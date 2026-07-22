@@ -1,6 +1,11 @@
 const Project = require('../models/Project');
 const Task = require('../models/Task');
 const Notification = require('../models/Notification');
+const {
+  getTaskStatsByProject,
+  serializeProjectSummary,
+} = require('../services/projectSummaryService');
+const { syncDeadlineReminderNotificationsForUser } = require('../services/notificationService');
 
 const startOfDay = (date) => {
   const value = new Date(date);
@@ -68,21 +73,6 @@ const buildStats = ({ projects, tasks, now, userId }) => {
   };
 };
 
-const buildProjectProgress = (projects, tasks) => {
-  return projects.map((project) => {
-    const projectTasks = tasks.filter((task) => toObjectIdString(task.project) === project._id.toString());
-    const completedTasks = projectTasks.filter((task) => task.status === 'Done').length;
-    const progress = projectTasks.length === 0 ? 0 : Math.round((completedTasks / projectTasks.length) * 100);
-
-    return {
-      id: project._id,
-      title: project.title,
-      progress,
-      deadline: project.dueDate || project.createdAt,
-    };
-  });
-};
-
 const buildActivity = (projects, tasks) => {
   const projectActivity = projects.map((project) => ({
     id: `project-${project._id}`,
@@ -124,6 +114,9 @@ const formatNotification = (notification) => ({
   time: notification.createdAt ? new Date(notification.createdAt).toLocaleString() : '',
   timestamp: notification.createdAt,
   read: !!notification.read,
+  entityType: notification.entityType || null,
+  entityId: notification.entityId || null,
+  metadata: notification.metadata || {},
 });
 
 exports.getDashboardData = async (req, res) => {
@@ -133,6 +126,46 @@ exports.getDashboardData = async (req, res) => {
     const projectIds = projects.map((project) => project._id);
     const tasks = await getAccessibleTasks(projectIds);
     const myTasks = tasks.filter((task) => isTaskAssignedToUser(task, req.user._id));
+    const taskStatsByProject = await getTaskStatsByProject(projectIds);
+
+    await syncDeadlineReminderNotificationsForUser(req.user);
+
+    const upcomingMeetings = projects
+      .flatMap((project) => {
+        const meetings = Array.isArray(project.meetings) ? project.meetings : [];
+        return meetings
+          .filter((meeting) => meeting?.scheduledFor && meeting?.status !== 'Cancelled')
+          .map((meeting) => ({
+            id: meeting._id,
+            title: meeting.title,
+            description: meeting.description || '',
+            scheduledFor: meeting.scheduledFor,
+            timezone: meeting.timezone || project.dueTimezone || null,
+            projectId: project._id,
+            projectTitle: project.title,
+            meetingLink: meeting.meetingLink || '',
+          }));
+      })
+      .filter((meeting) => new Date(meeting.scheduledFor).getTime() >= Date.now())
+      .sort((left, right) => new Date(left.scheduledFor) - new Date(right.scheduledFor))
+      .slice(0, 5);
+
+    const recentResources = projects
+      .flatMap((project) => {
+        const resources = Array.isArray(project.sharedResources) ? project.sharedResources : [];
+        return resources.map((resource) => ({
+          id: resource._id,
+          title: resource.title,
+          description: resource.description || '',
+          type: resource.type || 'link',
+          url: resource.url || '',
+          createdAt: resource.createdAt || project.updatedAt,
+          projectId: project._id,
+          projectTitle: project.title,
+        }));
+      })
+      .sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt))
+      .slice(0, 5);
 
     res.status(200).json({
       success: true,
@@ -167,12 +200,16 @@ exports.getDashboardData = async (req, res) => {
           createdAt: task.createdAt,
           updatedAt: task.updatedAt,
         })),
-        projects: buildProjectProgress(projects, tasks),
+        projects: projects.map((project) =>
+          serializeProjectSummary(project, taskStatsByProject.get(project._id.toString()))
+        ),
         notifications: await Notification.find({ user: req.user._id })
           .sort({ createdAt: -1 })
           .limit(8)
           .then((items) => items.map(formatNotification)),
         activity: buildActivity(projects, tasks),
+        upcomingMeetings,
+        recentResources,
       },
     });
   } catch (error) {
@@ -192,7 +229,7 @@ exports.getDashboardStats = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      stats: buildStats({ projects, tasks, now }),
+      stats: buildStats({ projects, tasks, now, userId: req.user._id }),
     });
   } catch (error) {
     res.status(500).json({
@@ -222,10 +259,7 @@ exports.getDashboardActivity = async (req, res) => {
 
 exports.getDashboardNotifications = async (req, res) => {
   try {
-    const now = new Date();
-    const projects = await getAccessibleProjects(req.user._id);
-    const projectIds = projects.map((project) => project._id);
-    const tasks = await getAccessibleTasks(projectIds);
+    await syncDeadlineReminderNotificationsForUser(req.user);
     const notifications = await Notification.find({ user: req.user._id })
       .sort({ createdAt: -1 })
       .limit(8);
