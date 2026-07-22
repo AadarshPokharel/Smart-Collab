@@ -47,6 +47,19 @@ export const createProject = async (projectData) => {
 };
 
 /**
+ * Create or refresh a demo-ready workspace for the current user
+ * @returns {Promise} Seeded demo project payload
+ */
+export const createDemoWorkspace = async () => {
+  try {
+    const response = await api.post('/projects/demo-seed');
+    return response.data;
+  } catch (error) {
+    throw error.response?.data || error;
+  }
+};
+
+/**
  * Update an existing project
  * @param {string} projectId - Project ID
  * @param {Object} updates - { title?, description?, status?, milestones? }

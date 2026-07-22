@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const {
   createProject,
+  seedDemoWorkspace,
   getProjects,
   getProjectById,
   updateProject,
@@ -30,6 +31,9 @@ router.get('/', getProjects);
 
 // POST   /api/projects          - Create new project (Admin/ProjectManager only)
 router.post('/', createProject);
+
+// POST   /api/projects/demo-seed - Create or refresh a demo-ready workspace for the current user
+router.post('/demo-seed', seedDemoWorkspace);
 
 // GET    /api/projects/:id      - Get project by ID
 router.get('/:id', getProjectById);

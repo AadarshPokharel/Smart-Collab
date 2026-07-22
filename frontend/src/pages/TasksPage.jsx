@@ -26,6 +26,7 @@ import { useAuth } from '../contexts/AuthContext';
 import NotificationDropdown from '../components/NotificationDropdown';
 import { normalizeNotifications } from '../utils/notifications';
 import api from '../services/api';
+import { createDemoWorkspace as seedDemoWorkspace } from '../api/projectsApi';
 import { projectService, taskService } from '../services';
 
 const TASK_STATUSES = ['To Do', 'In Progress', 'In Review', 'Done'];
@@ -357,6 +358,7 @@ export default function TasksPage() {
   const [savingTask, setSavingTask] = useState(false);
   const [deletingTaskId, setDeletingTaskId] = useState('');
   const [updatingStatusId, setUpdatingStatusId] = useState('');
+  const [creatingDemoWorkspace, setCreatingDemoWorkspace] = useState(false);
   const [formError, setFormError] = useState('');
   const [taskForm, setTaskForm] = useState({
     title: '',
@@ -741,6 +743,21 @@ export default function TasksPage() {
     }
   };
 
+  const handleCreateDemoWorkspace = async () => {
+    if (creatingDemoWorkspace) return;
+
+    try {
+      setCreatingDemoWorkspace(true);
+      const response = await seedDemoWorkspace();
+      await Promise.all([loadTaskPageData({ showSpinner: false }), loadNotifications()]);
+      toast.success(response?.message || 'Demo workspace is ready');
+    } catch (error) {
+      toast.error(error?.message || error?.response?.data?.message || 'Failed to create demo workspace');
+    } finally {
+      setCreatingDemoWorkspace(false);
+    }
+  };
+
   const emptyStateMessage = tasks.length === 0
     ? 'No tasks have been created yet.'
     : 'No tasks match your current search or filter.';
@@ -985,14 +1002,34 @@ export default function TasksPage() {
                   <CheckSquare size={30} className="text-slate-300" />
                   <h3 className="mt-4 text-lg font-semibold text-slate-900">No tasks found</h3>
                   <p className="mt-2 max-w-md text-sm text-slate-500">{emptyStateMessage}</p>
-                  {tasks.length === 0 && hasTaskCreateAccess && (
-                    <button
-                      onClick={openCreateTaskModal}
-                      className="mt-5 inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700"
-                    >
-                      <Plus size={16} />
-                      Create your first task
-                    </button>
+                  {tasks.length === 0 && (
+                    <div className="mt-5 flex flex-col items-center gap-3 sm:flex-row">
+                      {hasTaskCreateAccess ? (
+                        <button
+                          onClick={openCreateTaskModal}
+                          className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700"
+                        >
+                          <Plus size={16} />
+                          Create your first task
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => navigate('/projects')}
+                          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                        >
+                          <FolderKanban size={16} />
+                          Go to projects
+                        </button>
+                      )}
+                      <button
+                        onClick={handleCreateDemoWorkspace}
+                        disabled={creatingDemoWorkspace}
+                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {creatingDemoWorkspace ? <Loader2 size={16} className="animate-spin" /> : <MessageSquare size={16} />}
+                        {creatingDemoWorkspace ? 'Preparing Demo' : 'Create Demo Workspace'}
+                      </button>
+                    </div>
                   )}
                 </div>
               ) : (

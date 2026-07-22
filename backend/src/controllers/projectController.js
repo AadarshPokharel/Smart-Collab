@@ -1,6 +1,8 @@
 const Project = require('../models/Project');
 const Task = require('../models/Task');
 const User = require('../models/User');
+const Message = require('../models/Message');
+const Notification = require('../models/Notification');
 const { createNotification, createNotifications } = require('../services/notificationService');
 const {
   getTaskStatsByProject,
@@ -8,6 +10,107 @@ const {
   serializeProjectDetail,
   toObjectIdString,
 } = require('../services/projectSummaryService');
+
+const DEMO_PROJECT_TITLE = 'SmartCollab Demo Workspace';
+const DEMO_PROJECT_DESCRIPTION =
+  'A ready-to-walk-through SmartCollab workspace with sample tasks, messages, meetings, and shared resources for demos and workshops.';
+
+const buildSeedDate = ({ daysOffset = 0, hour = 9, minute = 0 } = {}) => {
+  const date = new Date();
+  date.setDate(date.getDate() + daysOffset);
+  date.setHours(hour, minute, 0, 0);
+  return date;
+};
+
+const DEMO_TASK_BLUEPRINTS = [
+  {
+    title: 'Finalize sprint walkthrough',
+    description:
+      'Prepare the step-by-step walkthrough for tasks, messages, notifications, and project collaboration.',
+    status: 'In Progress',
+    priority: 'High',
+    dueDate: () => buildSeedDate({ daysOffset: 1, hour: 11, minute: 0 }),
+  },
+  {
+    title: 'Review notification preferences',
+    description:
+      'Verify reminder settings and unread states before the final SmartCollab workshop.',
+    status: 'To Do',
+    priority: 'Medium',
+    dueDate: () => buildSeedDate({ daysOffset: 0, hour: 16, minute: 30 }),
+  },
+  {
+    title: 'Resolve onboarding polish feedback',
+    description:
+      'Close the last UI polish items across dashboard, project, and collaboration surfaces.',
+    status: 'In Review',
+    priority: 'High',
+    dueDate: () => buildSeedDate({ daysOffset: 2, hour: 14, minute: 0 }),
+  },
+  {
+    title: 'Follow up on overdue dependency audit',
+    description:
+      'Keep one overdue item visible so deadline urgency appears clearly during the demo.',
+    status: 'To Do',
+    priority: 'High',
+    dueDate: () => buildSeedDate({ daysOffset: -2, hour: 10, minute: 0 }),
+  },
+  {
+    title: 'Archive release checklist',
+    description:
+      'Show a completed task with final notes so the workflow includes a finished milestone.',
+    status: 'Done',
+    priority: 'Low',
+    dueDate: () => buildSeedDate({ daysOffset: -1, hour: 13, minute: 0 }),
+    completedAt: () => buildSeedDate({ daysOffset: 0, hour: 9, minute: 15 }),
+  },
+];
+
+const DEMO_MESSAGE_BLUEPRINTS = [
+  'Welcome to the SmartCollab demo workspace. This project is ready for a live walkthrough.',
+  'Tasks, meetings, notifications, and shared resources are all connected here so the workflow feels unified.',
+  'Use this space to show how a team can move from planning into action without switching between apps.',
+];
+
+const DEMO_RESOURCE_BLUEPRINTS = [
+  {
+    title: 'Final demo script',
+    description: 'Talking points and feature order for the workshop walkthrough.',
+    type: 'link',
+    url: 'https://docs.google.com/document/d/smartcollab-demo-script',
+  },
+  {
+    title: 'Workshop resource folder',
+    description: 'Shared links, screenshots, and presentation materials for the final demo.',
+    type: 'link',
+    url: 'https://drive.google.com/drive/folders/smartcollab-demo-workshop',
+  },
+];
+
+const DEMO_MEETING_BLUEPRINTS = [
+  {
+    title: 'Final workshop sync',
+    description: 'Walk through the final SmartCollab demo flow and confirm ownership for each section.',
+    meetingLink: 'https://meet.google.com/smart-collab-demo',
+    timezone: 'America/Chicago',
+    scheduledFor: () => buildSeedDate({ daysOffset: 1, hour: 15, minute: 0 }),
+  },
+];
+
+const DEMO_NOTIFICATION_BLUEPRINTS = [
+  {
+    seedKey: 'demo-task-assignment',
+    type: 'TaskAssigned',
+    title: 'Demo task assigned',
+    message: 'The demo workspace includes a seeded task workflow so you can show task progression immediately.',
+  },
+  {
+    seedKey: 'demo-project-update',
+    type: 'ProjectUpdate',
+    title: 'Demo workspace ready',
+    message: 'Meetings, shared resources, and recent activity were prepared for the SmartCollab demo workspace.',
+  },
+];
 
 const isGlobalAdmin = (user) => user?.role === 'admin';
 
@@ -241,6 +344,133 @@ const canManageMeeting = (project, meeting, user) =>
 const canManageResource = (project, resource, user) =>
   canManageProject(project, user) || toObjectIdString(resource?.uploadedBy) === toObjectIdString(user?._id);
 
+const ensureDemoProjectMembership = (project, userId) => {
+  const alreadyMember = project.members.some(
+    (member) => toObjectIdString(member.user) === toObjectIdString(userId)
+  );
+
+  if (!alreadyMember) {
+    project.members.push({
+      user: userId,
+      role: 'Owner',
+    });
+  }
+};
+
+const ensureDemoMeetings = (project, userId) => {
+  const existingTitles = new Set((project.meetings || []).map((meeting) => meeting.title));
+  let changed = false;
+
+  DEMO_MEETING_BLUEPRINTS.forEach((meetingBlueprint) => {
+    if (existingTitles.has(meetingBlueprint.title)) return;
+
+    project.meetings.push({
+      title: meetingBlueprint.title,
+      description: meetingBlueprint.description,
+      meetingLink: meetingBlueprint.meetingLink,
+      scheduledFor: meetingBlueprint.scheduledFor(),
+      timezone: meetingBlueprint.timezone,
+      participants: [userId],
+      createdBy: userId,
+      status: 'Scheduled',
+    });
+    changed = true;
+  });
+
+  return changed;
+};
+
+const ensureDemoResources = (project, userId) => {
+  const existingTitles = new Set((project.sharedResources || []).map((resource) => resource.title));
+  let changed = false;
+
+  DEMO_RESOURCE_BLUEPRINTS.forEach((resourceBlueprint) => {
+    if (existingTitles.has(resourceBlueprint.title)) return;
+
+    project.sharedResources.push({
+      title: resourceBlueprint.title,
+      description: resourceBlueprint.description,
+      type: resourceBlueprint.type,
+      url: resourceBlueprint.url,
+      uploadedBy: userId,
+      createdAt: new Date(),
+    });
+    changed = true;
+  });
+
+  return changed;
+};
+
+const ensureDemoTasks = async (projectId, userId) => {
+  const existingTasks = await Task.find({ project: projectId }).select('title');
+  const existingTitles = new Set(existingTasks.map((task) => task.title));
+  const tasksToInsert = DEMO_TASK_BLUEPRINTS.filter((taskBlueprint) => !existingTitles.has(taskBlueprint.title)).map(
+    (taskBlueprint) => ({
+      title: taskBlueprint.title,
+      description: taskBlueprint.description,
+      project: projectId,
+      assignedTo: userId,
+      assignedBy: userId,
+      status: taskBlueprint.status,
+      priority: taskBlueprint.priority,
+      dueDate: taskBlueprint.dueDate(),
+      completedAt: taskBlueprint.completedAt ? taskBlueprint.completedAt() : null,
+    })
+  );
+
+  if (tasksToInsert.length > 0) {
+    await Task.insertMany(tasksToInsert);
+  }
+};
+
+const ensureDemoMessages = async (projectId, userId) => {
+  const existingMessages = await Message.find({ project: projectId }).select('content');
+  const existingContents = new Set(existingMessages.map((message) => message.content));
+  const messagesToInsert = DEMO_MESSAGE_BLUEPRINTS.filter((content) => !existingContents.has(content)).map(
+    (content) => ({
+      sender: userId,
+      project: projectId,
+      content,
+      readBy: [userId],
+      read: true,
+    })
+  );
+
+  if (messagesToInsert.length > 0) {
+    await Message.insertMany(messagesToInsert);
+  }
+};
+
+const ensureDemoNotifications = async (userId, projectId) => {
+  const existingNotifications = await Notification.find({
+    user: userId,
+    'metadata.seedKey': { $in: DEMO_NOTIFICATION_BLUEPRINTS.map((item) => item.seedKey) },
+  }).select('metadata.seedKey');
+
+  const existingSeedKeys = new Set(
+    existingNotifications.map((notification) => notification?.metadata?.seedKey).filter(Boolean)
+  );
+
+  const entries = DEMO_NOTIFICATION_BLUEPRINTS.filter(
+    (notificationBlueprint) => !existingSeedKeys.has(notificationBlueprint.seedKey)
+  ).map((notificationBlueprint) => ({
+    user: userId,
+    type: notificationBlueprint.type,
+    title: notificationBlueprint.title,
+    message: notificationBlueprint.message,
+    entityType: 'Project',
+    entityId: projectId,
+    metadata: {
+      seedKey: notificationBlueprint.seedKey,
+      projectId: projectId.toString(),
+    },
+  }));
+
+  if (entries.length > 0) {
+    await createNotifications(entries);
+  }
+};
+
 exports.createProject = async (req, res) => {
   try {
     const { title, description, status, dueDate, dueTimezone } = req.body;
@@ -283,6 +513,89 @@ exports.createProject = async (req, res) => {
       success: true,
       data: payload,
       message: 'Project created successfully',
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.seedDemoWorkspace = async (req, res) => {
+  try {
+    let project = await Project.findOne({
+      owner: req.user._id,
+      title: DEMO_PROJECT_TITLE,
+    });
+
+    let projectChanged = false;
+    let created = false;
+
+    if (!project) {
+      project = new Project({
+        title: DEMO_PROJECT_TITLE,
+        description: DEMO_PROJECT_DESCRIPTION,
+        owner: req.user._id,
+        status: 'Active',
+        dueDate: buildSeedDate({ daysOffset: 7, hour: 17, minute: 0 }),
+        dueTimezone: req.user?.preferences?.timezone || 'UTC',
+        members: [],
+      });
+      created = true;
+      projectChanged = true;
+    }
+
+    if (!project.description) {
+      project.description = DEMO_PROJECT_DESCRIPTION;
+      projectChanged = true;
+    }
+
+    if (!project.dueDate || new Date(project.dueDate).getTime() <= Date.now()) {
+      project.dueDate = buildSeedDate({ daysOffset: 7, hour: 17, minute: 0 });
+      projectChanged = true;
+    }
+
+    if (!project.dueTimezone) {
+      project.dueTimezone = req.user?.preferences?.timezone || 'UTC';
+      projectChanged = true;
+    }
+
+    if (project.status !== 'Active') {
+      project.status = 'Active';
+      projectChanged = true;
+    }
+
+    const membersBefore = project.members.length;
+    ensureDemoProjectMembership(project, req.user._id);
+    if (project.members.length !== membersBefore) {
+      projectChanged = true;
+    }
+
+    if (ensureDemoMeetings(project, req.user._id)) {
+      projectChanged = true;
+    }
+
+    if (ensureDemoResources(project, req.user._id)) {
+      projectChanged = true;
+    }
+
+    if (projectChanged) {
+      await project.save();
+    }
+
+    await ensureDemoTasks(project._id, req.user._id);
+    await ensureDemoMessages(project._id, req.user._id);
+    await ensureDemoNotifications(req.user._id, project._id);
+
+    const payload = await buildProjectPayload(project, { detail: true });
+
+    return res.status(created ? 201 : 200).json({
+      success: true,
+      data: payload,
+      message: created
+        ? 'Demo workspace created successfully'
+        : 'Demo workspace is ready to use',
     });
   } catch (error) {
     return res.status(500).json({

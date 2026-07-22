@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import { createDemoWorkspace as seedDemoWorkspace } from '../api/projectsApi';
 import NotificationDropdown from '../components/NotificationDropdown';
 import {
   Bell,
@@ -200,6 +201,7 @@ const DashboardPage = () => {
   const [recentResources, setRecentResources] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedTask, setSelectedTask] = useState(null);
+  const [creatingDemoWorkspace, setCreatingDemoWorkspace] = useState(false);
 
   const handleLogout = () => {
     logout();
@@ -363,6 +365,21 @@ const DashboardPage = () => {
       console.error('Failed to complete task:', error);
       toast.error(error?.response?.data?.error || 'Failed to complete task');
       refreshDashboard().catch(() => {});
+    }
+  };
+
+  const handleCreateDemoWorkspace = async () => {
+    if (creatingDemoWorkspace) return;
+
+    try {
+      setCreatingDemoWorkspace(true);
+      const response = await seedDemoWorkspace();
+      await refreshDashboard();
+      toast.success(response?.message || 'Demo workspace is ready');
+    } catch (error) {
+      toast.error(error?.message || error?.response?.data?.message || 'Failed to create demo workspace');
+    } finally {
+      setCreatingDemoWorkspace(false);
     }
   };
 
@@ -539,8 +556,38 @@ const DashboardPage = () => {
 
                 <div className="flex-1 space-y-4">
                   {visibleProjects.length === 0 ? (
-                    <div className="flex h-full min-h-[280px] items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center text-sm text-slate-500">
-                      No active projects.
+                    <div className="flex h-full min-h-[280px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center">
+                      <FolderKanban size={30} className="text-slate-300" />
+                      <h3 className="mt-4 text-lg font-semibold text-slate-900">No active projects yet</h3>
+                      <p className="mt-2 max-w-md text-sm text-slate-500">
+                        Build a demo-ready workspace in one click or start from a blank project setup.
+                      </p>
+                      <div className="mt-5 flex flex-col items-center gap-3 sm:flex-row">
+                        <button
+                          onClick={handleCreateDemoWorkspace}
+                          disabled={creatingDemoWorkspace}
+                          className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                        >
+                          {creatingDemoWorkspace ? (
+                            <>
+                              <Clock size={15} className="animate-spin" />
+                              Preparing demo workspace
+                            </>
+                          ) : (
+                            <>
+                              <Plus size={15} />
+                              Create demo workspace
+                            </>
+                          )}
+                        </button>
+                        <button
+                          onClick={() => navigate('/projects', { state: { openCreate: true } })}
+                          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                        >
+                          <FolderKanban size={15} />
+                          Create blank project
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <div className="grid gap-4 lg:grid-cols-2">
