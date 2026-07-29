@@ -1,5 +1,7 @@
 const jwt = require('jwt-simple');
 const User = require('../models/User');
+const { getRequiredEnv } = require('../config/env');
+const JWT_SECRET = getRequiredEnv('JWT_SECRET');
 
 exports.authMiddleware = async (req, res, next) => {
   try {
@@ -14,7 +16,7 @@ exports.authMiddleware = async (req, res, next) => {
     }
 
     // Verify token
-    const decoded = jwt.decode(token, process.env.JWT_SECRET || 'your_jwt_secret');
+    const decoded = jwt.decode(token, JWT_SECRET);
 
     // Check token expiration
     if (decoded.exp && decoded.exp < Math.floor(Date.now() / 1000)) {
@@ -49,7 +51,7 @@ exports.optionalAuth = async (req, res, next) => {
     const token = req.headers.authorization?.split(' ')[1];
 
     if (token) {
-      const decoded = jwt.decode(token, process.env.JWT_SECRET || 'your_jwt_secret');
+      const decoded = jwt.decode(token, JWT_SECRET);
       if (decoded.exp && decoded.exp < Math.floor(Date.now() / 1000)) {
         return res.status(401).json({
           success: false,

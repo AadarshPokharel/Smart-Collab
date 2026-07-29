@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
 const mongoose = require('mongoose');
+const { getAllowedOrigins, getRequiredEnv } = require('./config/env');
 const { authMiddleware } = require('./middleware/auth');
 const {
   getDashboardData,
@@ -12,32 +13,21 @@ const {
 } = require('./controllers/dashboardController');
 
 const app = express();
+const allowedOrigins = getAllowedOrigins();
 
 // Middleware
 app.use(morgan('combined'));
 app.use(cors({
-  origin: function(origin, callback) {
-    const allowedOrigins = [
-      'http://localhost:3000',
-      'http://localhost:3001',
-      'http://127.0.0.1:3000',
-      'http://127.0.0.1:3001',
-      process.env.FRONTEND_URL
-    ];
-    
+  origin(origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
     }
-  }
+  },
+  credentials: true,
 }));
 app.use(express.json());
-
-// Database Connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/smartcollab')
-  .then(() => console.log('MongoDB connected'))
-  .catch(err => console.log('MongoDB connection error:', err));
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
@@ -71,7 +61,52 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong!' });
 });
 
-const PORT = process.env.PORT || 5001;
-app.listen(PORT, () => {
-  console.log(`SmartCollab backend running on port ${PORT}`);
-});
+const connectDatabase = async () => {
+  const mongoUri = getRequiredEnv('MONGODB_URI');
+
+  await mongoose.connect(mongoUri, {
+    serverSelectionTimeoutMS: 10000,
+  });
+
+  console.log('MongoDB connected');
+};
+
+const startServer = async () => {
+  try {
+    await connectDatabase();
+
+    const PORT = process.env.PORT || 5000;
+    const server = app.listen(PORT, () => {
+      console.log(`SmartCollab backend running on port ${PORT}`);
+    });
+
+    const shutdown = async (signal) => {
+      console.log(`${signal} received, shutting down gracefully`);
+
+      server.close(async () => {
+        try {
+          await mongoose.connection.close();
+        } finally {
+          process.exit(0);
+        }
+      });
+
+      setTimeout(() => {
+        process.exit(1);
+      }, 10000).unref();
+    };
+
+    process.on('SIGINT', () => {
+      shutdown('SIGINT');
+    });
+
+    process.on('SIGTERM', () => {
+      shutdown('SIGTERM');
+    });
+  } catch (error) {
+    console.error('Failed to start SmartCollab backend:', error.message);
+    process.exit(1);
+  }
+};
+
+startServer();

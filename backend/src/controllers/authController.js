@@ -2,7 +2,9 @@ const User = require('../models/User');
 const jwt = require('jwt-simple');
 const crypto = require('crypto');
 const https = require('https');
+const { getClientUrl, getRequiredEnv, isProduction } = require('../config/env');
 const { getFirebaseAuth, isFirebaseAdminConfigured } = require('../lib/firebaseAdmin');
+const JWT_SECRET = getRequiredEnv('JWT_SECRET');
 
 // Generate JWT token
 const generateToken = (userId) => {
@@ -11,13 +13,13 @@ const generateToken = (userId) => {
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + 24 * 60 * 60, // 24 hours
   };
-  return jwt.encode(payload, process.env.JWT_SECRET || 'your_jwt_secret');
+  return jwt.encode(payload, JWT_SECRET);
 };
 
 const normalizeEmail = (email = '') => email.trim().toLowerCase();
 
 const buildResetPasswordUrl = (token) => {
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const frontendUrl = getClientUrl() || 'http://localhost:3000';
   return `${frontendUrl.replace(/\/$/, '')}/reset-password/${token}`;
 };
 
@@ -412,7 +414,7 @@ exports.forgotPassword = async (req, res) => {
       message: 'If an account with that email exists, a password reset link has been prepared.',
     };
 
-    if ((process.env.NODE_ENV || 'development') !== 'production') {
+    if (!isProduction()) {
       response.resetUrl = buildResetPasswordUrl(rawToken);
     }
 

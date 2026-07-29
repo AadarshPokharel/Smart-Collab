@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { authService } from '../services';
+import { API_URL } from '../services/api';
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -123,13 +124,12 @@ export const AuthProvider = ({ children }) => {
 
       return { success: true };
     } catch (error) {
-      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
       const isNetworkError = !error.response && (error.message === 'Network Error' || error.code === 'ERR_NETWORK');
 
       return {
         success: false,
         error: isNetworkError
-          ? `Cannot reach server (${apiUrl}). Start the backend and verify the API URL.`
+          ? `Cannot reach server (${API_URL}). Start the backend and verify the API URL.`
           : (error.response?.data?.error || error.message || 'Login failed'),
       };
     }
