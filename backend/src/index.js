@@ -45,6 +45,7 @@ app.use('/api/projects', require('./routes/projects'));
 app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/messages', require('./routes/messages'));
 app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/activities', require('./routes/activities'));
 
 app.get('/api/dashboard', authMiddleware, getDashboardData);
 app.get('/api/dashboard/stats', authMiddleware, getDashboardStats);

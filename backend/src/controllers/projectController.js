@@ -5,6 +5,10 @@ const Message = require('../models/Message');
 const Notification = require('../models/Notification');
 const { createNotification, createNotifications } = require('../services/notificationService');
 const {
+  getDisplayName,
+  recordActivitySafely,
+} = require('../services/activityService');
+const {
   getTaskStatsByProject,
   serializeProjectSummary,
   serializeProjectDetail,
@@ -153,6 +157,59 @@ const normalizeFutureDate = (value, label = 'dueDate') => {
   }
 
   return { hasValue: true, date: parsed };
+};
+
+const toIsoOrNull = (value) => {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+};
+
+const snapshotProjectForActivity = (project) => ({
+  title: project?.title || '',
+  description: project?.description || '',
+  status: project?.status || 'Active',
+  dueDate: toIsoOrNull(project?.dueDate),
+  dueTimezone: project?.dueTimezone || null,
+});
+
+const snapshotMeetingForActivity = (meeting) => ({
+  title: meeting?.title || '',
+  description: meeting?.description || '',
+  meetingLink: meeting?.meetingLink || '',
+  scheduledFor: toIsoOrNull(meeting?.scheduledFor),
+  timezone: meeting?.timezone || null,
+  status: meeting?.status || 'Scheduled',
+  participants: Array.isArray(meeting?.participants)
+    ? meeting.participants.map((participant) => toObjectIdString(participant)).filter(Boolean)
+    : [],
+});
+
+const snapshotResourceForActivity = (resource) => ({
+  title: resource?.title || '',
+  description: resource?.description || '',
+  type: resource?.type || 'link',
+  url: resource?.url || '',
+});
+
+const buildChangedFieldPayload = (before, after, keys = []) => {
+  const oldValue = {};
+  const newValue = {};
+
+  keys.forEach((key) => {
+    const left = before?.[key] ?? null;
+    const right = after?.[key] ?? null;
+    if (JSON.stringify(left) !== JSON.stringify(right)) {
+      oldValue[key] = left;
+      newValue[key] = right;
+    }
+  });
+
+  return {
+    oldValue,
+    newValue,
+    hasChanges: Object.keys(oldValue).length > 0,
+  };
 };
 
 const populateProjectRelations = async (project, { detail = false } = {}) => {
@@ -506,6 +563,26 @@ exports.createProject = async (req, res) => {
         },
       ],
     });
+    const actorName = getDisplayName(req.user);
+
+    await recordActivitySafely({
+      projectId: project._id,
+      userId: req.user._id,
+      actionType: 'created',
+      entityType: 'project',
+      entityId: project._id,
+      title: project.title,
+      description: `created project “${project.title}”`,
+      newValue: snapshotProjectForActivity(project),
+      projectTitle: project.title,
+      userName: actorName,
+      entityTitle: project.title,
+      metadata: {
+        projectTitle: project.title,
+        userName: actorName,
+        entityTitle: project.title,
+      },
+    });
 
     const payload = await buildProjectPayload(project, { detail: true });
 
@@ -684,6 +761,9 @@ exports.updateProject = async (req, res) => {
       });
     }
 
+    const beforeSnapshot = snapshotProjectForActivity(project);
+    const actorName = getDisplayName(req.user);
+
     const { title, description, status, milestones, dueDate, dueTimezone } = req.body;
 
     if (title !== undefined) {
@@ -731,6 +811,37 @@ exports.updateProject = async (req, res) => {
     }
 
     await project.save();
+    const afterSnapshot = snapshotProjectForActivity(project);
+    const changedFields = buildChangedFieldPayload(beforeSnapshot, afterSnapshot, [
+      'title',
+      'description',
+      'status',
+      'dueDate',
+      'dueTimezone',
+    ]);
+
+    if (changedFields.hasChanges) {
+      await recordActivitySafely({
+        projectId: project._id,
+        userId: req.user._id,
+        actionType: 'updated',
+        entityType: 'project',
+        entityId: project._id,
+        title: project.title,
+        description: `updated project “${project.title}”`,
+        oldValue: changedFields.oldValue,
+        newValue: changedFields.newValue,
+        projectTitle: project.title,
+        userName: actorName,
+        entityTitle: project.title,
+        metadata: {
+          projectTitle: project.title,
+          userName: actorName,
+          entityTitle: project.title,
+        },
+      });
+    }
+
     const payload = await buildProjectPayload(project, { detail: true });
 
     return res.status(200).json({
@@ -764,8 +875,29 @@ exports.deleteProject = async (req, res) => {
       });
     }
 
+    const actorName = getDisplayName(req.user);
+    const projectSnapshot = snapshotProjectForActivity(project);
     await Task.deleteMany({ project: req.params.id });
     await Project.findByIdAndDelete(req.params.id);
+
+    await recordActivitySafely({
+      projectId: project._id,
+      userId: req.user._id,
+      actionType: 'deleted',
+      entityType: 'project',
+      entityId: project._id,
+      title: project.title,
+      description: `deleted project “${project.title}”`,
+      oldValue: projectSnapshot,
+      projectTitle: project.title,
+      userName: actorName,
+      entityTitle: project.title,
+      metadata: {
+        projectTitle: project.title,
+        userName: actorName,
+        entityTitle: project.title,
+      },
+    });
 
     return res.status(200).json({
       success: true,
@@ -798,6 +930,7 @@ exports.inviteMember = async (req, res) => {
       });
     }
 
+    const actorName = getDisplayName(req.user);
     const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
     let invitedUser = null;
 
@@ -838,6 +971,30 @@ exports.inviteMember = async (req, res) => {
       metadata: { projectId: project._id.toString(), role },
     });
 
+    await recordActivitySafely({
+      projectId: project._id,
+      userId: req.user._id,
+      actionType: 'member_added',
+      entityType: 'project',
+      entityId: invitedUser._id,
+      title: invitedUser.email,
+      description: `added ${getDisplayName(invitedUser)} to project “${project.title}”`,
+      newValue: {
+        memberId: invitedUser._id.toString(),
+        memberName: getDisplayName(invitedUser),
+        role,
+      },
+      projectTitle: project.title,
+      userName: actorName,
+      entityTitle: getDisplayName(invitedUser),
+      metadata: {
+        projectTitle: project.title,
+        userName: actorName,
+        entityTitle: getDisplayName(invitedUser),
+        role,
+      },
+    });
+
     const payload = await buildProjectPayload(project, { detail: true });
 
     return res.status(200).json({
@@ -872,6 +1029,14 @@ exports.removeMember = async (req, res) => {
       });
     }
 
+    const actorName = getDisplayName(req.user);
+    const removedMemberRecord = project.members.find(
+      (member) => toObjectIdString(member.user) === toObjectIdString(memberId)
+    );
+    const removedMember = removedMemberRecord
+      ? await User.findById(removedMemberRecord.user).select('firstName lastName email')
+      : null;
+
     project.members = project.members.filter(
       (member) => toObjectIdString(member.user) !== toObjectIdString(memberId)
     );
@@ -884,6 +1049,31 @@ exports.removeMember = async (req, res) => {
       message: `You were removed from “${project.title}”.`,
       entityType: 'Project',
       entityId: project._id,
+    });
+
+    await recordActivitySafely({
+      projectId: project._id,
+      userId: req.user._id,
+      actionType: 'member_removed',
+      entityType: 'project',
+      entityId: memberId,
+      title: removedMember ? getDisplayName(removedMember) : 'Removed member',
+      description: `removed ${removedMember ? getDisplayName(removedMember) : 'a member'} from project “${project.title}”`,
+      oldValue: removedMember
+        ? {
+            memberId: toObjectIdString(removedMember._id),
+            memberName: getDisplayName(removedMember),
+            role: removedMemberRecord?.role || 'Member',
+          }
+        : null,
+      projectTitle: project.title,
+      userName: actorName,
+      entityTitle: removedMember ? getDisplayName(removedMember) : 'Removed member',
+      metadata: {
+        projectTitle: project.title,
+        userName: actorName,
+        entityTitle: removedMember ? getDisplayName(removedMember) : 'Removed member',
+      },
     });
 
     const payload = await buildProjectPayload(project, { detail: true });
@@ -919,6 +1109,7 @@ exports.addMeeting = async (req, res) => {
       });
     }
 
+    const actorName = getDisplayName(req.user);
     const { errors, next } = validateMeetingPayload(req.body);
     if (errors.length > 0) {
       return res.status(400).json({
@@ -948,6 +1139,7 @@ exports.addMeeting = async (req, res) => {
       createdBy: req.user._id,
       status: next.status,
     });
+    const createdMeeting = project.meetings[project.meetings.length - 1];
 
     await project.save();
 
@@ -968,6 +1160,25 @@ exports.addMeeting = async (req, res) => {
         }))
       );
     }
+
+    await recordActivitySafely({
+      projectId: project._id,
+      userId: req.user._id,
+      actionType: 'created',
+      entityType: 'meeting',
+      entityId: createdMeeting?._id,
+      title: next.title,
+      description: `created meeting “${next.title}”`,
+      newValue: snapshotMeetingForActivity(createdMeeting || next),
+      projectTitle: project.title,
+      userName: actorName,
+      entityTitle: next.title,
+      metadata: {
+        projectTitle: project.title,
+        userName: actorName,
+        entityTitle: next.title,
+      },
+    });
 
     const payload = await buildProjectPayload(project, { detail: true });
 
@@ -1010,6 +1221,8 @@ exports.updateMeeting = async (req, res) => {
       });
     }
 
+    const beforeSnapshot = snapshotMeetingForActivity(meeting);
+    const actorName = getDisplayName(req.user);
     const { errors, next } = validateMeetingPayload(req.body, { partial: true });
     if (errors.length > 0) {
       return res.status(400).json({
@@ -1040,6 +1253,39 @@ exports.updateMeeting = async (req, res) => {
     if (next.status !== undefined) meeting.status = next.status;
 
     await project.save();
+    const afterSnapshot = snapshotMeetingForActivity(meeting);
+    const changedFields = buildChangedFieldPayload(beforeSnapshot, afterSnapshot, [
+      'title',
+      'description',
+      'meetingLink',
+      'scheduledFor',
+      'timezone',
+      'status',
+      'participants',
+    ]);
+
+    if (changedFields.hasChanges) {
+      await recordActivitySafely({
+        projectId: project._id,
+        userId: req.user._id,
+        actionType: 'updated',
+        entityType: 'meeting',
+        entityId: meeting._id,
+        title: meeting.title,
+        description: `updated meeting “${meeting.title}”`,
+        oldValue: changedFields.oldValue,
+        newValue: changedFields.newValue,
+        projectTitle: project.title,
+        userName: actorName,
+        entityTitle: meeting.title,
+        metadata: {
+          projectTitle: project.title,
+          userName: actorName,
+          entityTitle: meeting.title,
+        },
+      });
+    }
+
     const payload = await buildProjectPayload(project, { detail: true });
 
     return res.status(200).json({
@@ -1081,8 +1327,30 @@ exports.deleteMeeting = async (req, res) => {
       });
     }
 
+    const actorName = getDisplayName(req.user);
+    const meetingSnapshot = snapshotMeetingForActivity(meeting);
+    const meetingTitle = meeting.title;
     meeting.deleteOne();
     await project.save();
+
+    await recordActivitySafely({
+      projectId: project._id,
+      userId: req.user._id,
+      actionType: 'deleted',
+      entityType: 'meeting',
+      entityId: req.params.meetingId,
+      title: meetingTitle,
+      description: `deleted meeting “${meetingTitle}”`,
+      oldValue: meetingSnapshot,
+      projectTitle: project.title,
+      userName: actorName,
+      entityTitle: meetingTitle,
+      metadata: {
+        projectTitle: project.title,
+        userName: actorName,
+        entityTitle: meetingTitle,
+      },
+    });
 
     const payload = await buildProjectPayload(project, { detail: true });
 
@@ -1117,6 +1385,7 @@ exports.addResource = async (req, res) => {
       });
     }
 
+    const actorName = getDisplayName(req.user);
     const { errors, next } = validateResourcePayload(req.body);
     if (errors.length > 0) {
       return res.status(400).json({
@@ -1132,6 +1401,7 @@ exports.addResource = async (req, res) => {
       url: next.url,
       uploadedBy: req.user._id,
     });
+    const createdResource = project.sharedResources[project.sharedResources.length - 1];
 
     await project.save();
 
@@ -1149,6 +1419,26 @@ exports.addResource = async (req, res) => {
         }))
       );
     }
+
+    await recordActivitySafely({
+      projectId: project._id,
+      userId: req.user._id,
+      actionType: 'created',
+      entityType: 'resource',
+      entityId: createdResource?._id,
+      title: next.title,
+      description: `shared resource “${next.title}”`,
+      newValue: snapshotResourceForActivity(createdResource || next),
+      projectTitle: project.title,
+      userName: actorName,
+      entityTitle: next.title,
+      metadata: {
+        projectTitle: project.title,
+        userName: actorName,
+        entityTitle: next.title,
+        resourceType: next.type,
+      },
+    });
 
     const payload = await buildProjectPayload(project, { detail: true });
 
@@ -1191,6 +1481,8 @@ exports.updateResource = async (req, res) => {
       });
     }
 
+    const beforeSnapshot = snapshotResourceForActivity(resource);
+    const actorName = getDisplayName(req.user);
     const { errors, next } = validateResourcePayload(req.body, { partial: true });
     if (errors.length > 0) {
       return res.status(400).json({
@@ -1205,6 +1497,37 @@ exports.updateResource = async (req, res) => {
     if (next.url !== undefined) resource.url = next.url;
 
     await project.save();
+    const afterSnapshot = snapshotResourceForActivity(resource);
+    const changedFields = buildChangedFieldPayload(beforeSnapshot, afterSnapshot, [
+      'title',
+      'description',
+      'type',
+      'url',
+    ]);
+
+    if (changedFields.hasChanges) {
+      await recordActivitySafely({
+        projectId: project._id,
+        userId: req.user._id,
+        actionType: 'updated',
+        entityType: 'resource',
+        entityId: resource._id,
+        title: resource.title,
+        description: `updated resource “${resource.title}”`,
+        oldValue: changedFields.oldValue,
+        newValue: changedFields.newValue,
+        projectTitle: project.title,
+        userName: actorName,
+        entityTitle: resource.title,
+        metadata: {
+          projectTitle: project.title,
+          userName: actorName,
+          entityTitle: resource.title,
+          resourceType: resource.type,
+        },
+      });
+    }
+
     const payload = await buildProjectPayload(project, { detail: true });
 
     return res.status(200).json({
@@ -1246,8 +1569,31 @@ exports.deleteResource = async (req, res) => {
       });
     }
 
+    const actorName = getDisplayName(req.user);
+    const resourceSnapshot = snapshotResourceForActivity(resource);
+    const resourceTitle = resource.title;
     resource.deleteOne();
     await project.save();
+
+    await recordActivitySafely({
+      projectId: project._id,
+      userId: req.user._id,
+      actionType: 'deleted',
+      entityType: 'resource',
+      entityId: req.params.resourceId,
+      title: resourceTitle,
+      description: `removed resource “${resourceTitle}”`,
+      oldValue: resourceSnapshot,
+      projectTitle: project.title,
+      userName: actorName,
+      entityTitle: resourceTitle,
+      metadata: {
+        projectTitle: project.title,
+        userName: actorName,
+        entityTitle: resourceTitle,
+        resourceType: resource.type,
+      },
+    });
 
     const payload = await buildProjectPayload(project, { detail: true });
 

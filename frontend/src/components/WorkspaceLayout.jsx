@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  History,
   Bell,
   CalendarDays,
   CheckSquare,
@@ -45,6 +46,7 @@ const NAV_ITEMS = [
   { id: 'projects', label: 'Projects', icon: FolderKanban, path: '/projects' },
   { id: 'tasks', label: 'Tasks', icon: CheckSquare, path: '/tasks' },
   { id: 'messages', label: 'Messages', icon: MessageSquare, path: '/messages' },
+  { id: 'activity', label: 'Activity', icon: History, path: '/activity' },
   { id: 'settings', label: 'Settings', icon: Settings, path: '/settings' },
 ];
 

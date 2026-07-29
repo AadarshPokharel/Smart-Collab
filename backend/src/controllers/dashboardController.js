@@ -1,6 +1,7 @@
 const Project = require('../models/Project');
 const Task = require('../models/Task');
 const Notification = require('../models/Notification');
+const { fetchActivities } = require('../services/activityService');
 const {
   getTaskStatsByProject,
   serializeProjectSummary,
@@ -22,13 +23,6 @@ const endOfDay = (date) => {
 const toObjectIdString = (value) => {
   if (!value) return null;
   return value._id ? value._id.toString() : value.toString();
-};
-
-const getDisplayName = (user) => {
-  if (!user) return 'Someone';
-  if (typeof user === 'string') return user;
-  const name = `${user.firstName || ''} ${user.lastName || ''}`.trim();
-  return name || user.email || 'Someone';
 };
 
 const isTaskAssignedToUser = (task, userId) => {
@@ -73,38 +67,6 @@ const buildStats = ({ projects, tasks, now, userId }) => {
   };
 };
 
-const buildActivity = (projects, tasks) => {
-  const projectActivity = projects.map((project) => ({
-    id: `project-${project._id}`,
-    text: `${getDisplayName(project.owner)} created project ${project.title}`,
-    actorName: getDisplayName(project.owner),
-    action: 'created project',
-    projectId: project._id,
-    projectTitle: project.title,
-    time: project.createdAt,
-    createdAt: project.createdAt,
-  }));
-
-  const taskActivity = tasks.map((task) => ({
-    id: `task-${task._id}`,
-    text: `${getDisplayName(task.assignedBy)} ${task.status === 'Done' ? 'completed' : 'updated'} task ${task.title}`,
-    actorName: getDisplayName(task.assignedBy),
-    action: task.status === 'Done' ? 'completed task' : 'updated task',
-    projectId: toObjectIdString(task.project),
-    projectTitle: task.project?.title || 'Untitled project',
-    time: task.createdAt,
-    createdAt: task.createdAt,
-  }));
-
-  return [...projectActivity, ...taskActivity]
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-    .slice(0, 8)
-    .map(({ createdAt, ...item }) => ({
-      ...item,
-      time: new Date(item.time).toLocaleString(),
-    }));
-};
-
 const formatNotification = (notification) => ({
   id: notification._id,
   type: notification.type,
@@ -127,6 +89,11 @@ exports.getDashboardData = async (req, res) => {
     const tasks = await getAccessibleTasks(projectIds);
     const myTasks = tasks.filter((task) => isTaskAssignedToUser(task, req.user._id));
     const taskStatsByProject = await getTaskStatsByProject(projectIds);
+    const activityResult = await fetchActivities({
+      user: req.user,
+      page: 1,
+      limit: 8,
+    });
 
     await syncDeadlineReminderNotificationsForUser(req.user);
 
@@ -207,7 +174,7 @@ exports.getDashboardData = async (req, res) => {
           .sort({ createdAt: -1 })
           .limit(8)
           .then((items) => items.map(formatNotification)),
-        activity: buildActivity(projects, tasks),
+        activity: activityResult.data,
         upcomingMeetings,
         recentResources,
       },
@@ -241,13 +208,25 @@ exports.getDashboardStats = async (req, res) => {
 
 exports.getDashboardActivity = async (req, res) => {
   try {
-    const projects = await getAccessibleProjects(req.user._id);
-    const projectIds = projects.map((project) => project._id);
-    const tasks = await getAccessibleTasks(projectIds);
+    const activityResult = await fetchActivities({
+      user: req.user,
+      page: req.query.page,
+      limit: req.query.limit || 8,
+      projectId: req.query.projectId || null,
+      userId: req.query.userId || null,
+      entityType:
+        req.query.entityType && req.query.entityType !== 'all' ? req.query.entityType : null,
+      actionType:
+        req.query.actionType && req.query.actionType !== 'all' ? req.query.actionType : null,
+      startDate: req.query.startDate || null,
+      endDate: req.query.endDate || null,
+      search: req.query.search || '',
+    });
 
     res.status(200).json({
       success: true,
-      activity: buildActivity(projects, tasks),
+      activity: activityResult.data,
+      pagination: activityResult.pagination,
     });
   } catch (error) {
     res.status(500).json({

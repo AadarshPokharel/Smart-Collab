@@ -64,6 +64,24 @@ export const projectService = {
     api.delete(`/projects/${projectId}/members/${memberId}`, {
       data: { memberId },
     }),
+
+  addMeeting: (projectId, data) =>
+    api.post(`/projects/${projectId}/meetings`, data),
+
+  updateMeeting: (projectId, meetingId, data) =>
+    api.put(`/projects/${projectId}/meetings/${meetingId}`, data),
+
+  deleteMeeting: (projectId, meetingId) =>
+    api.delete(`/projects/${projectId}/meetings/${meetingId}`),
+
+  addResource: (projectId, data) =>
+    api.post(`/projects/${projectId}/resources`, data),
+
+  updateResource: (projectId, resourceId, data) =>
+    api.put(`/projects/${projectId}/resources/${resourceId}`, data),
+
+  deleteResource: (projectId, resourceId) =>
+    api.delete(`/projects/${projectId}/resources/${resourceId}`),
 };
 
 export const taskService = {
@@ -109,4 +127,12 @@ export const taskService = {
 
   deleteTask: (id) =>
     api.delete(`/tasks/${id}`),
+};
+
+export const activityService = {
+  getActivities: (params = {}) =>
+    api.get('/activities', { params }),
+
+  getProjectActivities: (projectId, params = {}) =>
+    api.get(`/projects/${projectId}/activities`, { params }),
 };

@@ -3,3 +3,4 @@ export { default as api } from '../services/api';
 
 // Projects API
 export * from './projectsApi';
+export * from './activitiesApi';

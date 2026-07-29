@@ -13,6 +13,7 @@ import ProjectsPage from './pages/ProjectsPage';
 import ProjectPage from './pages/ProjectPage';
 import TasksPage from './pages/TasksPage';
 import MessagesPage from './pages/MessagesPage';
+import ActivityPage from './pages/ActivityPage';
 import SettingsPage from './pages/SettingsPage';
 import './styles/App.css';
 
@@ -86,6 +87,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <MessagesPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/activity"
+        element={
+          <ProtectedRoute>
+            <ActivityPage />
           </ProtectedRoute>
         }
       />

@@ -15,6 +15,7 @@ import {
   LayoutGrid,
   CalendarDays,
   CheckSquare,
+  History,
   MessageSquare,
   Settings,
   Menu,
@@ -688,6 +689,12 @@ const ProjectsPage = () => {
               onClick={() => navigate('/messages')}
             >
               <MessageSquare size={18} /> Messages
+            </button>
+            <button
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100"
+              onClick={() => navigate('/activity')}
+            >
+              <History size={18} /> Activity
             </button>
             <button
               className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100"

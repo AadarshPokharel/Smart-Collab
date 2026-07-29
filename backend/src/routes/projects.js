@@ -16,6 +16,7 @@ const {
   updateResource,
   deleteResource,
 } = require('../controllers/projectController');
+const { getProjectActivities } = require('../controllers/activityController');
 const { authMiddleware } = require('../middleware/auth');
 
 /**
@@ -34,6 +35,9 @@ router.post('/', createProject);
 
 // POST   /api/projects/demo-seed - Create or refresh a demo-ready workspace for the current user
 router.post('/demo-seed', seedDemoWorkspace);
+
+// GET    /api/projects/:id/activities - Get activity history for a project
+router.get('/:id/activities', getProjectActivities);
 
 // GET    /api/projects/:id      - Get project by ID
 router.get('/:id', getProjectById);

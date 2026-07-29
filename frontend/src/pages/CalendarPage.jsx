@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   FolderKanban,
+  History,
   LayoutGrid,
   LogOut,
   Menu,
@@ -500,6 +501,7 @@ const CalendarPage = () => {
             <SidebarItem icon={FolderKanban} label="Projects" onClick={() => navigate('/projects')} />
             <SidebarItem icon={CheckSquare} label="Tasks" onClick={() => navigate('/tasks')} />
             <SidebarItem icon={MessageSquare} label="Messages" onClick={() => navigate('/messages')} />
+            <SidebarItem icon={History} label="Activity" onClick={() => navigate('/activity')} />
             <SidebarItem icon={Settings} label="Settings" onClick={() => navigate('/settings')} />
           </nav>
         </aside>

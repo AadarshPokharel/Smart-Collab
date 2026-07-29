@@ -1,6 +1,11 @@
 const Task = require('../models/Task');
 const Project = require('../models/Project');
 const { createNotification } = require('../services/notificationService');
+const {
+  getDisplayName,
+  recordActivitiesSafely,
+  recordActivitySafely,
+} = require('../services/activityService');
 
 const TASK_STATUSES = ['To Do', 'In Progress', 'In Review', 'Done'];
 const TASK_PRIORITIES = ['Low', 'Medium', 'High'];
@@ -111,6 +116,35 @@ const populateTaskRelations = async (task) => {
   await task.populate('assignedBy', 'firstName lastName email avatar');
   return task;
 };
+
+const toIsoOrNull = (value) => {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+};
+
+const getProjectTitle = (project) => project?.title || 'Untitled project';
+
+const snapshotTask = (task) => ({
+  title: task?.title || '',
+  description: task?.description || '',
+  status: task?.status || 'To Do',
+  priority: task?.priority || 'Medium',
+  dueDate: toIsoOrNull(task?.dueDate),
+  dueTimezone: task?.dueTimezone || null,
+  projectId: toObjectIdString(task?.project),
+  projectTitle: task?.project?.title || '',
+  assignedToId: toObjectIdString(task?.assignedTo),
+  assignedToName: task?.assignedTo ? getDisplayName(task.assignedTo) : 'Unassigned',
+});
+
+const buildTaskActivityMetadata = ({ task, projectTitle, actorName, extra = {} }) => ({
+  projectTitle,
+  userName: actorName,
+  entityTitle: task?.title || '',
+  taskTitle: task?.title || '',
+  ...extra,
+});
 
 const sendTaskNotification = async ({ recipientId, actorId, ...payload }) => {
   if (!recipientId) return;
@@ -229,6 +263,7 @@ exports.createTask = async (req, res) => {
     });
 
     await populateTaskRelations(task);
+    const actorName = getDisplayName(req.user);
 
     await sendTaskNotification({
       recipientId: task.assignedTo,
@@ -239,6 +274,30 @@ exports.createTask = async (req, res) => {
       entityType: 'Task',
       entityId: task._id,
       metadata: { projectId: project._id.toString() },
+    });
+
+    await recordActivitySafely({
+      projectId: project._id,
+      userId: req.user._id,
+      actionType: 'created',
+      entityType: 'task',
+      entityId: task._id,
+      title: task.title,
+      description: `created task “${task.title}”`,
+      newValue: snapshotTask(task),
+      projectTitle: project.title,
+      userName: actorName,
+      entityTitle: task.title,
+      metadata: buildTaskActivityMetadata({
+        task,
+        projectTitle: project.title,
+        actorName,
+        extra: {
+          assignedToName: task.assignedTo ? getDisplayName(task.assignedTo) : 'Unassigned',
+          status: task.status,
+          priority: task.priority,
+        },
+      }),
     });
 
     return res.status(201).json({
@@ -424,6 +483,13 @@ exports.updateTask = async (req, res) => {
       dueTimezone,
     } = req.body;
 
+    await task.populate('assignedTo', 'firstName lastName email avatar');
+    const beforeSnapshot = {
+      ...snapshotTask(task),
+      projectTitle: getProjectTitle(currentProject),
+    };
+    const actorName = getDisplayName(req.user);
+
     let targetProject = currentProject;
     if (projectId && projectId !== toObjectIdString(currentProject._id)) {
       targetProject = await Project.findById(projectId);
@@ -516,6 +582,7 @@ exports.updateTask = async (req, res) => {
 
     await task.save();
     await populateTaskRelations(task);
+    const afterSnapshot = snapshotTask(task);
 
     const nextAssignedTo = toObjectIdString(task.assignedTo);
     if (nextAssignedTo && nextAssignedTo !== previousAssignedTo) {
@@ -543,6 +610,174 @@ exports.updateTask = async (req, res) => {
         metadata: { projectId: toObjectIdString(task.project) },
       });
     }
+
+    const activityEntries = [];
+    const targetProjectTitle = getProjectTitle(task.project);
+
+    if (beforeSnapshot.status !== afterSnapshot.status) {
+      activityEntries.push({
+        projectId: task.project?._id || task.project,
+        userId: req.user._id,
+        actionType: afterSnapshot.status === 'Done' ? 'completed' : 'status_changed',
+        entityType: 'task',
+        entityId: task._id,
+        title: task.title,
+        description:
+          afterSnapshot.status === 'Done'
+            ? `completed task “${task.title}”`
+            : `changed task “${task.title}” status from ${beforeSnapshot.status} to ${afterSnapshot.status}`,
+        oldValue: { status: beforeSnapshot.status },
+        newValue: { status: afterSnapshot.status },
+        projectTitle: targetProjectTitle,
+        userName: actorName,
+        entityTitle: task.title,
+        metadata: buildTaskActivityMetadata({
+          task,
+          projectTitle: targetProjectTitle,
+          actorName,
+          extra: {
+            fromStatus: beforeSnapshot.status,
+            toStatus: afterSnapshot.status,
+          },
+        }),
+      });
+    }
+
+    if (beforeSnapshot.priority !== afterSnapshot.priority) {
+      activityEntries.push({
+        projectId: task.project?._id || task.project,
+        userId: req.user._id,
+        actionType: 'priority_changed',
+        entityType: 'task',
+        entityId: task._id,
+        title: task.title,
+        description: `changed task “${task.title}” priority from ${beforeSnapshot.priority} to ${afterSnapshot.priority}`,
+        oldValue: { priority: beforeSnapshot.priority },
+        newValue: { priority: afterSnapshot.priority },
+        projectTitle: targetProjectTitle,
+        userName: actorName,
+        entityTitle: task.title,
+        metadata: buildTaskActivityMetadata({
+          task,
+          projectTitle: targetProjectTitle,
+          actorName,
+          extra: {
+            fromPriority: beforeSnapshot.priority,
+            toPriority: afterSnapshot.priority,
+          },
+        }),
+      });
+    }
+
+    if (
+      beforeSnapshot.assignedToId !== afterSnapshot.assignedToId ||
+      beforeSnapshot.assignedToName !== afterSnapshot.assignedToName
+    ) {
+      const isUnassigned = !afterSnapshot.assignedToId;
+      activityEntries.push({
+        projectId: task.project?._id || task.project,
+        userId: req.user._id,
+        actionType: 'assigned',
+        entityType: 'task',
+        entityId: task._id,
+        title: task.title,
+        description: isUnassigned
+          ? `unassigned task “${task.title}”`
+          : `assigned task “${task.title}” to ${afterSnapshot.assignedToName}`,
+        oldValue: {
+          assignedToId: beforeSnapshot.assignedToId,
+          assignedToName: beforeSnapshot.assignedToName,
+        },
+        newValue: {
+          assignedToId: afterSnapshot.assignedToId,
+          assignedToName: afterSnapshot.assignedToName,
+        },
+        projectTitle: targetProjectTitle,
+        userName: actorName,
+        entityTitle: task.title,
+        metadata: buildTaskActivityMetadata({
+          task,
+          projectTitle: targetProjectTitle,
+          actorName,
+          extra: {
+            assignedToName: afterSnapshot.assignedToName,
+          },
+        }),
+      });
+    }
+
+    if (beforeSnapshot.dueDate !== afterSnapshot.dueDate) {
+      activityEntries.push({
+        projectId: task.project?._id || task.project,
+        userId: req.user._id,
+        actionType: 'due_date_changed',
+        entityType: 'task',
+        entityId: task._id,
+        title: task.title,
+        description: `changed task “${task.title}” due date`,
+        oldValue: {
+          dueDate: beforeSnapshot.dueDate,
+          dueTimezone: beforeSnapshot.dueTimezone,
+        },
+        newValue: {
+          dueDate: afterSnapshot.dueDate,
+          dueTimezone: afterSnapshot.dueTimezone,
+        },
+        projectTitle: targetProjectTitle,
+        userName: actorName,
+        entityTitle: task.title,
+        metadata: buildTaskActivityMetadata({
+          task,
+          projectTitle: targetProjectTitle,
+          actorName,
+        }),
+      });
+    }
+
+    const genericChanges = {};
+    if (beforeSnapshot.title !== afterSnapshot.title) {
+      genericChanges.title = { old: beforeSnapshot.title, new: afterSnapshot.title };
+    }
+    if (beforeSnapshot.description !== afterSnapshot.description) {
+      genericChanges.description = {
+        old: beforeSnapshot.description,
+        new: afterSnapshot.description,
+      };
+    }
+    if (beforeSnapshot.projectId !== afterSnapshot.projectId) {
+      genericChanges.project = {
+        old: beforeSnapshot.projectTitle || getProjectTitle(currentProject),
+        new: afterSnapshot.projectTitle || targetProjectTitle,
+      };
+    }
+
+    if (Object.keys(genericChanges).length > 0) {
+      activityEntries.push({
+        projectId: task.project?._id || task.project,
+        userId: req.user._id,
+        actionType: 'updated',
+        entityType: 'task',
+        entityId: task._id,
+        title: task.title,
+        description: `updated task “${task.title}”`,
+        oldValue: Object.fromEntries(
+          Object.entries(genericChanges).map(([key, value]) => [key, value.old])
+        ),
+        newValue: Object.fromEntries(
+          Object.entries(genericChanges).map(([key, value]) => [key, value.new])
+        ),
+        projectTitle: targetProjectTitle,
+        userName: actorName,
+        entityTitle: task.title,
+        metadata: buildTaskActivityMetadata({
+          task,
+          projectTitle: targetProjectTitle,
+          actorName,
+        }),
+      });
+    }
+
+    await recordActivitiesSafely(activityEntries);
 
     return res.status(200).json({
       success: true,
@@ -598,6 +833,7 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
+    const previousStatus = task.status;
     task.status = status;
     task.completedAt = status === 'Done' ? task.completedAt || new Date() : null;
 
@@ -614,6 +850,36 @@ exports.updateTaskStatus = async (req, res) => {
         entityType: 'Task',
         entityId: task._id,
         metadata: { projectId: toObjectIdString(task.project) },
+      });
+    }
+
+    if (previousStatus !== status) {
+      const actorName = getDisplayName(req.user);
+      await recordActivitySafely({
+        projectId: task.project?._id || task.project,
+        userId: req.user._id,
+        actionType: status === 'Done' ? 'completed' : 'status_changed',
+        entityType: 'task',
+        entityId: task._id,
+        title: task.title,
+        description:
+          status === 'Done'
+            ? `completed task “${task.title}”`
+            : `changed task “${task.title}” status from ${previousStatus} to ${status}`,
+        oldValue: { status: previousStatus },
+        newValue: { status },
+        projectTitle: getProjectTitle(task.project),
+        userName: actorName,
+        entityTitle: task.title,
+        metadata: buildTaskActivityMetadata({
+          task,
+          projectTitle: getProjectTitle(task.project),
+          actorName,
+          extra: {
+            fromStatus: previousStatus,
+            toStatus: status,
+          },
+        }),
       });
     }
 
@@ -654,7 +920,29 @@ exports.deleteTask = async (req, res) => {
       });
     }
 
+    await task.populate('assignedTo', 'firstName lastName email avatar');
+    const taskSnapshot = snapshotTask(task);
+    const actorName = getDisplayName(req.user);
     await Task.findByIdAndDelete(req.params.id);
+
+    await recordActivitySafely({
+      projectId: project._id,
+      userId: req.user._id,
+      actionType: 'deleted',
+      entityType: 'task',
+      entityId: task._id,
+      title: task.title,
+      description: `deleted task “${task.title}”`,
+      oldValue: taskSnapshot,
+      projectTitle: project.title,
+      userName: actorName,
+      entityTitle: task.title,
+      metadata: buildTaskActivityMetadata({
+        task,
+        projectTitle: project.title,
+        actorName,
+      }),
+    });
 
     return res.status(200).json({
       success: true,

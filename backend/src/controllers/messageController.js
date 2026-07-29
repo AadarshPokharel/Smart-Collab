@@ -2,6 +2,10 @@ const Message = require('../models/Message');
 const Project = require('../models/Project');
 const User = require('../models/User');
 const { createNotifications } = require('../services/notificationService');
+const {
+  getDisplayName,
+  recordActivitySafely,
+} = require('../services/activityService');
 
 const toObjectIdString = (value) => {
   if (!value) return '';
@@ -190,6 +194,7 @@ exports.sendMessage = async (req, res) => {
 
     await message.save();
     await message.populate('sender', 'firstName lastName email avatar');
+    const senderName = getDisplayName(req.user);
 
     const recipientIds = getProjectRecipientIds(project, req.user._id);
     if (recipientIds.length > 0) {
@@ -199,9 +204,6 @@ exports.sendMessage = async (req, res) => {
       }).select('_id');
 
       if (recipients.length > 0) {
-        const senderName =
-          `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.email || 'A teammate';
-
         await createNotifications(
           recipients.map((recipient) => ({
             user: recipient._id,
@@ -218,6 +220,29 @@ exports.sendMessage = async (req, res) => {
         );
       }
     }
+
+    const messagePreview = content.trim().slice(0, 120);
+    await recordActivitySafely({
+      projectId: project._id,
+      userId: req.user._id,
+      actionType: 'message_sent',
+      entityType: 'message',
+      entityId: message._id,
+      title: messagePreview || 'Project message',
+      description: `sent a message in “${project.title}”`,
+      newValue: {
+        content: content.trim(),
+      },
+      projectTitle: project.title,
+      userName: senderName,
+      entityTitle: messagePreview || 'Project message',
+      metadata: {
+        projectTitle: project.title,
+        userName: senderName,
+        entityTitle: messagePreview || 'Project message',
+        messagePreview,
+      },
+    });
 
     return res.status(201).json({
       success: true,

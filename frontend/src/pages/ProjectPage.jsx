@@ -18,13 +18,23 @@ import {
   Video,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import ActivityList from '../components/ActivityList';
 import WorkspaceLayout from '../components/WorkspaceLayout';
+import { fetchProjectActivities } from '../api/activitiesApi';
 import { useAuth } from '../contexts/AuthContext';
 import { normalizeNotifications } from '../utils/notifications';
 import api from '../services/api';
 import { projectService, taskService } from '../services';
 
-const TAB_OPTIONS = ['overview', 'board', 'members', 'collaboration', 'settings'];
+const TAB_OPTIONS = ['overview', 'board', 'members', 'activity', 'collaboration', 'settings'];
+const PROJECT_ACTIVITY_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'project', label: 'Projects' },
+  { id: 'task', label: 'Tasks' },
+  { id: 'message', label: 'Messages' },
+  { id: 'meeting', label: 'Meetings' },
+  { id: 'resource', label: 'Resources' },
+];
 
 const formatDateLabel = (value, options) => {
   if (!value) return 'Not set';
@@ -178,6 +188,13 @@ export default function ProjectPage() {
   const [resourceForm, setResourceForm] = useState(defaultResourceForm);
   const [resourceSaving, setResourceSaving] = useState(false);
   const [editingResourceId, setEditingResourceId] = useState('');
+  const [projectActivities, setProjectActivities] = useState([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityLoadingMore, setActivityLoadingMore] = useState(false);
+  const [activityError, setActivityError] = useState('');
+  const [activityPage, setActivityPage] = useState(1);
+  const [activityHasMore, setActivityHasMore] = useState(false);
+  const [activityEntityFilter, setActivityEntityFilter] = useState('all');
 
   const activeTab = TAB_OPTIONS.includes(searchParams.get('tab'))
     ? searchParams.get('tab')
@@ -275,6 +292,52 @@ export default function ProjectPage() {
   const reloadProjectAndNotifications = async () => {
     await Promise.all([loadProject({ silent: true }), loadNotifications()]);
   };
+
+  const loadProjectActivity = useCallback(
+    async ({ nextPage = 1, append = false } = {}) => {
+      try {
+        if (append) {
+          setActivityLoadingMore(true);
+        } else {
+          setActivityLoading(true);
+          setActivityError('');
+        }
+
+        const response = await fetchProjectActivities(id, {
+          page: nextPage,
+          limit: 8,
+          entityType: activityEntityFilter,
+        });
+        const nextItems = Array.isArray(response?.data) ? response.data : [];
+        const pagination = response?.pagination || {};
+
+        setProjectActivities((previous) => (append ? [...previous, ...nextItems] : nextItems));
+        setActivityPage(pagination.page || nextPage);
+        setActivityHasMore(Boolean(pagination.hasMore));
+      } catch (error) {
+        setActivityError(
+          error?.response?.data?.message ||
+            error?.response?.data?.error ||
+            error?.message ||
+            'Unable to load project activity right now.'
+        );
+        if (!append) {
+          setProjectActivities([]);
+          setActivityHasMore(false);
+        }
+      } finally {
+        setActivityLoading(false);
+        setActivityLoadingMore(false);
+      }
+    },
+    [activityEntityFilter, id]
+  );
+
+  useEffect(() => {
+    if (activeTab === 'activity') {
+      loadProjectActivity({ nextPage: 1 });
+    }
+  }, [activeTab, loadProjectActivity]);
 
   const handleMarkNotificationRead = async (notification) => {
     const notificationId = notification?.id || notification?._id;
@@ -1142,6 +1205,64 @@ export default function ProjectPage() {
                 </div>
               ))}
             </div>
+          </SectionCard>
+        </div>
+      )}
+
+      {activeTab === 'activity' && (
+        <div className="space-y-6">
+          <SectionCard
+            title="Project Activity"
+            description="Review the project-specific history for tasks, conversations, meetings, and shared resources."
+            actions={
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={() => navigate('/activity')}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                >
+                  Open full activity page
+                </button>
+                <button
+                  onClick={() => loadProjectActivity({ nextPage: 1 })}
+                  className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700"
+                >
+                  Refresh
+                </button>
+              </div>
+            }
+          >
+            <div className="mb-5 flex flex-wrap gap-2">
+              {PROJECT_ACTIVITY_FILTERS.map((filter) => (
+                <button
+                  key={filter.id}
+                  onClick={() => setActivityEntityFilter(filter.id)}
+                  className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                    activityEntityFilter === filter.id
+                      ? 'border-violet-200 bg-violet-100 text-violet-700'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </div>
+
+            <ActivityList
+              activities={projectActivities}
+              loading={activityLoading}
+              error={activityError}
+              onRetry={() => loadProjectActivity({ nextPage: 1 })}
+              onLoadMore={
+                activityHasMore
+                  ? () => loadProjectActivity({ nextPage: activityPage + 1, append: true })
+                  : null
+              }
+              hasMore={activityHasMore}
+              loadingMore={activityLoadingMore}
+              showProject={false}
+              emptyTitle="No project activity yet"
+              emptyDescription="Project actions will appear here as teammates create tasks, send messages, schedule meetings, and share resources."
+            />
           </SectionCard>
         </div>
       )}
