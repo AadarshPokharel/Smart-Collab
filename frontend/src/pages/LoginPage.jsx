@@ -73,6 +73,14 @@ export default function LoginPage() {
 
       <div className="auth-right">
         <div className="auth-form-container">
+          <div className="auth-mobile-brand">
+            <img src="/logo.jpg" alt="SmartCollab" className="auth-mobile-logo" />
+            <div className="auth-mobile-brand-copy">
+              <h2>SmartCollab</h2>
+              <p>Work Together. Achieve More.</p>
+            </div>
+          </div>
+
           <h1>Sign In</h1>
           <p className="auth-subtitle">Sign in to collaborate with your team</p>
 
