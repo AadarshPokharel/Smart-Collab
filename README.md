@@ -91,15 +91,4 @@ Smart-Collab/
 ### DevOps
 - **Development:** Nodemon for auto-reload
 - **Testing:** Jest
-- **Deployment:** Render-ready single-service deployment via `render.yaml`
-
----
-
-## Deployment
-
-SmartCollab is now prepared for a single-service Render deployment.
-
-- Express serves the built React frontend in production
-- frontend API requests resolve through the same host using `/api`
-- deployment config is in [`render.yaml`](/Users/mr.apokharelgmail.com/Desktop/school/collabrix/Smart-Collab/render.yaml)
-- detailed setup notes are in [`docs/DEPLOY_RENDER.md`](/Users/mr.apokharelgmail.com/Desktop/school/collabrix/Smart-Collab/docs/DEPLOY_RENDER.md)
+- **Deployment:** (To be configured)

@@ -1,20 +1,7 @@
 import axios from 'axios';
 
-const getDefaultApiUrl = () => {
-  if (typeof window === 'undefined') {
-    return '/api';
-  }
-
-  const host = window.location.hostname;
-  if (host === 'localhost' || host === '127.0.0.1') {
-    // Backend defaults to PORT=5001 (macOS often uses 5000 for AirTunes/AirPlay).
-    return 'http://localhost:5001/api';
-  }
-
-  return '/api';
-};
-
-const API_URL = process.env.REACT_APP_API_URL || getDefaultApiUrl();
+// Backend defaults to PORT=5001 (macOS often uses 5000 for AirTunes/AirPlay). You can override via REACT_APP_API_URL.
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
 
 const api = axios.create({
   baseURL: API_URL,
