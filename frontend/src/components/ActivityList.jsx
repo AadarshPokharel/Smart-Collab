@@ -14,6 +14,11 @@ import {
   UserMinus,
   Users,
 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import {
+  formatDateTimeInTimeZone,
+  getUserTimezone,
+} from '../utils/userPreferences';
 
 const FIELD_LABELS = {
   title: 'Title',
@@ -44,20 +49,25 @@ const getInitials = (name = 'U') =>
     .map((part) => part[0]?.toUpperCase() || '')
     .join('') || 'U';
 
-const formatDateTime = (value) => {
+const formatDateTime = (value, timeZone) => {
   if (!value) return 'Unknown time';
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return 'Unknown time';
 
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return formatDateTimeInTimeZone(
+    value,
+    timeZone,
+    {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    },
+    'Unknown time'
+  );
 };
 
-const formatRelativeTime = (value) => {
+const formatRelativeTime = (value, timeZone) => {
   if (!value) return '';
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return '';
@@ -72,10 +82,10 @@ const formatRelativeTime = (value) => {
   const diffDays = Math.round(diffHours / 24);
   if (diffDays < 7) return `${diffDays}d ago`;
 
-  return formatDateTime(value);
+  return formatDateTime(value, timeZone);
 };
 
-const formatValue = (value) => {
+const formatValue = (value, timeZone) => {
   if (value === null || value === undefined || value === '') return 'None';
   if (Array.isArray(value)) return value.length ? value.join(', ') : 'None';
 
@@ -85,7 +95,7 @@ const formatValue = (value) => {
       /\d{4}-\d{2}-\d{2}T/.test(value) &&
       Number.isFinite(asDate.getTime())
     ) {
-      return formatDateTime(value);
+      return formatDateTime(value, timeZone);
     }
     return value;
   }
@@ -95,7 +105,7 @@ const formatValue = (value) => {
   return String(value);
 };
 
-const buildChangeRows = (activity) => {
+const buildChangeRows = (activity, timeZone) => {
   const oldValue =
     activity?.oldValue && typeof activity.oldValue === 'object' && !Array.isArray(activity.oldValue)
       ? activity.oldValue
@@ -110,8 +120,8 @@ const buildChangeRows = (activity) => {
   return keys.map((key) => ({
     key,
     label: FIELD_LABELS[key] || key.replace(/([A-Z])/g, ' $1').replace(/^./, (value) => value.toUpperCase()),
-    oldValue: formatValue(oldValue[key]),
-    newValue: formatValue(newValue[key]),
+    oldValue: formatValue(oldValue[key], timeZone),
+    newValue: formatValue(newValue[key], timeZone),
   }));
 };
 
@@ -203,6 +213,9 @@ export default function ActivityList({
   showProject = true,
   onOpenProject = null,
 }) {
+  const { user } = useAuth();
+  const userTimeZone = getUserTimezone(user);
+
   if (loading) {
     return <LoadingState compact={compact} />;
   }
@@ -241,7 +254,7 @@ export default function ActivityList({
         const userName = activity?.user?.displayName || activity?.metadata?.userName || 'Someone';
         const projectTitle = activity?.project?.title || activity?.metadata?.projectTitle || 'Untitled project';
         const { icon: Icon, bubble } = getActivityVisual(activity);
-        const changeRows = compact ? [] : buildChangeRows(activity);
+        const changeRows = compact ? [] : buildChangeRows(activity, userTimeZone);
 
         return (
           <article
@@ -281,8 +294,8 @@ export default function ActivityList({
                           {projectTitle}
                         </span>
                       ) : null}
-                      <span>{formatDateTime(activity.createdAt)}</span>
-                      <span>{formatRelativeTime(activity.createdAt)}</span>
+                      <span>{formatDateTime(activity.createdAt, userTimeZone)}</span>
+                      <span>{formatRelativeTime(activity.createdAt, userTimeZone)}</span>
                     </div>
                   </div>
 

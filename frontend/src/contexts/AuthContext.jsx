@@ -12,6 +12,7 @@ import {
   isFirebaseConfigured,
   setFirebaseAuthPersistence,
 } from '../services/firebase';
+import { getUserTheme } from '../utils/userPreferences';
 
 const AuthContext = createContext();
 
@@ -19,6 +20,17 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [token, setToken] = useState(null);
+
+  const applyThemePreference = (theme) => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+
+    const nextTheme = theme === 'dark' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = nextTheme;
+    document.documentElement.style.colorScheme = nextTheme;
+    document.body.dataset.theme = nextTheme;
+  };
 
   const persistAuth = (nextToken, nextUser, rememberMe) => {
     const storage = rememberMe ? localStorage : sessionStorage;
@@ -46,11 +58,19 @@ export const AuthProvider = ({ children }) => {
     const savedUser = localStorage.getItem('user') || sessionStorage.getItem('user');
 
     if (savedToken && savedUser) {
+      const parsedUser = JSON.parse(savedUser);
       setToken(savedToken);
-      setUser(JSON.parse(savedUser));
+      setUser(parsedUser);
+      applyThemePreference(parsedUser?.preferences?.theme);
+    } else {
+      applyThemePreference('light');
     }
     setLoading(false);
   }, []);
+
+  useEffect(() => {
+    applyThemePreference(getUserTheme(user));
+  }, [user]);
 
   const persistSessionFromResponse = (response, rememberMe) => {
     const { token: nextToken, user: nextUser } = response.data;

@@ -29,6 +29,12 @@ import { normalizeNotifications } from '../utils/notifications';
 import api from '../services/api';
 import { createDemoWorkspace as seedDemoWorkspace } from '../api/projectsApi';
 import { projectService, taskService } from '../services';
+import {
+  formatDateInTimeZone,
+  formatDateTimeInTimeZone,
+  getDateKeyInTimeZone,
+  getUserTimezone,
+} from '../utils/userPreferences';
 
 const TASK_STATUSES = ['To Do', 'In Progress', 'In Review', 'Done'];
 const TASK_PRIORITIES = ['Low', 'Medium', 'High'];
@@ -181,43 +187,32 @@ const dateFromKey = (dateKey) => {
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
-const formatDateLabel = (value, options = { month: 'short', day: 'numeric', year: 'numeric' }) => {
-  const dateKey = toDateKey(value);
-  const date = dateFromKey(dateKey);
-  if (!date) return 'No due date';
-  return date.toLocaleDateString(undefined, options);
-};
+const formatDateLabel = (
+  value,
+  timeZone,
+  options = { month: 'short', day: 'numeric', year: 'numeric' }
+) => formatDateInTimeZone(value, timeZone, options, 'No due date');
 
-const formatDateTimeLabel = (value) => {
-  if (!value) return 'Not available';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Not available';
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-};
+const formatDateTimeLabel = (value, timeZone) =>
+  formatDateTimeInTimeZone(value, timeZone, undefined, 'Not available');
 
 const formatDateInputValue = (value) => {
   return toDateKey(value);
 };
 
-const isDueToday = (task) => {
+const isDueToday = (task, timeZone) => {
   if (!task?.dueDate || task.status === 'Done') return false;
 
-  const dueDateKey = toDateKey(task.dueDate);
-  const todayKey = toDateKey(new Date());
+  const dueDateKey = getDateKeyInTimeZone(task.dueDate, timeZone);
+  const todayKey = getDateKeyInTimeZone(new Date(), timeZone);
   return Boolean(dueDateKey) && dueDateKey === todayKey;
 };
 
-const isOverdue = (task) => {
+const isOverdue = (task, timeZone) => {
   if (!task?.dueDate || task.status === 'Done') return false;
 
-  const dueDateKey = toDateKey(task.dueDate);
-  const todayKey = toDateKey(new Date());
+  const dueDateKey = getDateKeyInTimeZone(task.dueDate, timeZone);
+  const todayKey = getDateKeyInTimeZone(new Date(), timeZone);
   return Boolean(dueDateKey) && Boolean(todayKey) && dueDateKey < todayKey;
 };
 
@@ -339,6 +334,7 @@ const getErrorMessage = (error, fallback) =>
 export default function TasksPage() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const userTimeZone = getUserTimezone(user);
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -491,9 +487,9 @@ export default function TasksPage() {
         case 'assigned_to_me':
           return getEntityId(task.assignedTo) === getEntityId(user);
         case 'due_today':
-          return isDueToday(task);
+          return isDueToday(task, userTimeZone);
         case 'overdue':
-          return isOverdue(task);
+          return isOverdue(task, userTimeZone);
         case 'high_priority':
           return task.priority === 'High';
         case 'completed':
@@ -504,7 +500,7 @@ export default function TasksPage() {
     });
 
     return sortTasks(nextTasks);
-  }, [activeFilter, normalizedSearch, tasks, user]);
+  }, [activeFilter, normalizedSearch, tasks, user, userTimeZone]);
 
   const selectedProject = taskForm.projectId ? projectMap.get(taskForm.projectId) : null;
   const selectedProjectUsers = useMemo(
@@ -523,11 +519,11 @@ export default function TasksPage() {
   const overview = useMemo(() => {
     const openTasks = tasks.filter((task) => task.status !== 'Done').length;
     const assignedToMe = tasks.filter((task) => getEntityId(task.assignedTo) === getEntityId(user)).length;
-    const dueToday = tasks.filter((task) => isDueToday(task)).length;
+    const dueToday = tasks.filter((task) => isDueToday(task, userTimeZone)).length;
     const completed = tasks.filter((task) => task.status === 'Done').length;
 
     return { openTasks, assignedToMe, dueToday, completed };
-  }, [tasks, user]);
+  }, [tasks, user, userTimeZone]);
 
   const unreadCount = notifications.filter((item) => !item?.read).length;
 
@@ -1047,7 +1043,7 @@ export default function TasksPage() {
                       <article
                         key={task.id}
                         className={`rounded-3xl border p-5 transition ${
-                          isOverdue(task)
+                          isOverdue(task, userTimeZone)
                             ? 'border-rose-200 bg-rose-50/40'
                             : 'border-slate-200 bg-white hover:border-violet-200 hover:shadow-sm'
                         }`}
@@ -1058,8 +1054,8 @@ export default function TasksPage() {
                               <h3 className="text-lg font-semibold text-slate-900">{task.title}</h3>
                               <Badge tone={getPriorityTone(task.priority)}>{task.priority}</Badge>
                               <Badge tone={getStatusTone(task.status)}>{task.status}</Badge>
-                              {isDueToday(task) && <Badge tone="medium">Due today</Badge>}
-                              {isOverdue(task) && <Badge tone="high">Overdue</Badge>}
+                              {isDueToday(task, userTimeZone) && <Badge tone="medium">Due today</Badge>}
+                              {isOverdue(task, userTimeZone) && <Badge tone="high">Overdue</Badge>}
                             </div>
 
                             <p className="mt-2 text-sm font-medium text-violet-600">{task.projectName}</p>
@@ -1102,21 +1098,21 @@ export default function TasksPage() {
                           <div className="rounded-2xl bg-slate-50 p-4">
                             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Due date</p>
                             <p className="mt-2 text-sm font-medium text-slate-900">
-                              {formatDateLabel(task.dueDate)}
+                              {formatDateLabel(task.dueDate, userTimeZone)}
                             </p>
                           </div>
 
                           <div className="rounded-2xl bg-slate-50 p-4">
                             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Created</p>
                             <p className="mt-2 text-sm font-medium text-slate-900">
-                              {formatDateTimeLabel(task.createdAt)}
+                              {formatDateTimeLabel(task.createdAt, userTimeZone)}
                             </p>
                           </div>
 
                           <div className="rounded-2xl bg-slate-50 p-4">
                             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Updated</p>
                             <p className="mt-2 text-sm font-medium text-slate-900">
-                              {formatDateTimeLabel(task.updatedAt)}
+                              {formatDateTimeLabel(task.updatedAt, userTimeZone)}
                             </p>
                           </div>
                         </div>

@@ -28,6 +28,12 @@ import {
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import ActivityList from '../components/ActivityList';
+import {
+  formatDateInTimeZone,
+  getCurrentHourInTimeZone,
+  getDateKeyInTimeZone,
+  getUserTimezone,
+} from '../utils/userPreferences';
 
 const SmartCollabLogo = ({ size = 36 }) => (
   <img
@@ -106,14 +112,15 @@ const OverviewCard = ({ icon: Icon, label, value, tone = 'neutral' }) => {
   );
 };
 
-const formatDateLabel = (value, options) => {
-  if (!value) return 'No date set';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'No date set';
-  return date.toLocaleDateString(undefined, options || { month: 'short', day: 'numeric' });
-};
+const formatDateLabel = (value, timeZone, options) =>
+  formatDateInTimeZone(
+    value,
+    timeZone,
+    options || { month: 'short', day: 'numeric' },
+    'No date set'
+  );
 
-const formatRelativeTime = (value) => {
+const formatRelativeTime = (value, timeZone) => {
   if (!value) return '';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
@@ -129,7 +136,11 @@ const formatRelativeTime = (value) => {
   }
 
   const diffDays = Math.round(diffHours / 24);
-  return diffDays >= 0 ? `in ${diffDays}d` : `${Math.abs(diffDays)}d ago`;
+  if (Math.abs(diffDays) < 7) {
+    return diffDays >= 0 ? `in ${diffDays}d` : `${Math.abs(diffDays)}d ago`;
+  }
+
+  return formatDateLabel(value, timeZone, { month: 'short', day: 'numeric' });
 };
 
 const getPriorityTone = (priority) => {
@@ -145,34 +156,27 @@ const getUserName = (user) => {
   return `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || 'Unknown user';
 };
 
-const getTaskTone = (task) => {
-  const dueDate = task?.dueDate ? new Date(task.dueDate) : null;
-  if (!dueDate || Number.isNaN(dueDate.getTime())) return 'border-slate-200 bg-white';
+const getTaskTone = (task, timeZone) => {
+  const dueDateKey = getDateKeyInTimeZone(task?.dueDate, timeZone);
+  if (!dueDateKey) return 'border-slate-200 bg-white';
 
-  const today = new Date();
-  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const tomorrow = new Date(startOfToday);
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  const todayKey = getDateKeyInTimeZone(new Date(), timeZone);
 
-  if (dueDate < startOfToday && task.status !== 'Done') return 'border-rose-200 bg-rose-50/70';
-  if (dueDate < tomorrow && dueDate >= startOfToday && task.status !== 'Done') return 'border-amber-200 bg-amber-50/70';
+  if (dueDateKey < todayKey && task.status !== 'Done') return 'border-rose-200 bg-rose-50/70';
+  if (dueDateKey === todayKey && task.status !== 'Done') return 'border-amber-200 bg-amber-50/70';
   return 'border-slate-200 bg-white';
 };
 
-const getTaskUrgencyLabel = (task) => {
-  const dueDate = task?.dueDate ? new Date(task.dueDate) : null;
-  if (!dueDate || Number.isNaN(dueDate.getTime()) || task?.status === 'Done') return 'No deadline';
+const getTaskUrgencyLabel = (task, timeZone) => {
+  const dueDateKey = getDateKeyInTimeZone(task?.dueDate, timeZone);
+  if (!dueDateKey || task?.status === 'Done') return 'No deadline';
 
-  const today = new Date();
-  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const tomorrowStart = new Date(startOfToday);
-  tomorrowStart.setDate(tomorrowStart.getDate() + 1);
-  const dayAfterTomorrow = new Date(tomorrowStart);
-  dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 1);
+  const todayKey = getDateKeyInTimeZone(new Date(), timeZone);
+  const tomorrowKey = getDateKeyInTimeZone(Date.now() + 86400000, timeZone);
 
-  if (dueDate < startOfToday) return 'Overdue';
-  if (dueDate < tomorrowStart) return 'Due today';
-  if (dueDate < dayAfterTomorrow) return 'Due tomorrow';
+  if (dueDateKey < todayKey) return 'Overdue';
+  if (dueDateKey === todayKey) return 'Due today';
+  if (dueDateKey === tomorrowKey) return 'Due tomorrow';
   return 'Coming up';
 };
 
@@ -189,6 +193,7 @@ const compareTaskUrgency = (left, right) => {
 const DashboardPage = () => {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const userTimeZone = getUserTimezone(user);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -212,7 +217,7 @@ const DashboardPage = () => {
   };
 
   const getGreeting = () => {
-    const hour = new Date().getHours();
+    const hour = getCurrentHourInTimeZone(userTimeZone);
     if (hour < 12) return 'Welcome back';
     if (hour < 18) return 'Good afternoon';
     return 'Good evening';
@@ -253,24 +258,22 @@ const DashboardPage = () => {
   }, [tasks, normalizedSearch]);
 
   const todoTasks = useMemo(() => {
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const soon = new Date(startOfToday);
-    soon.setDate(soon.getDate() + 7);
+    const todayKey = getDateKeyInTimeZone(new Date(), userTimeZone);
+    const soonKey = getDateKeyInTimeZone(Date.now() + 7 * 86400000, userTimeZone);
 
     return filteredTasks
       .filter((task) => {
         if (!task.dueDate || task.status === 'Done') return false;
-        const dueDate = new Date(task.dueDate);
-        return Number.isFinite(dueDate.getTime()) && dueDate <= soon;
+        const dueDateKey = getDateKeyInTimeZone(task.dueDate, userTimeZone);
+        return Boolean(dueDateKey) && dueDateKey >= todayKey && dueDateKey <= soonKey;
       })
       .sort(compareTaskUrgency)
       .slice(0, 8)
       .map((task) => ({
         ...task,
-        urgencyLabel: getTaskUrgencyLabel(task),
+        urgencyLabel: getTaskUrgencyLabel(task, userTimeZone),
       }));
-  }, [filteredTasks]);
+  }, [filteredTasks, userTimeZone]);
 
   const visibleProjects = useMemo(() => {
     if (!normalizedSearch) return projects;
@@ -285,12 +288,12 @@ const DashboardPage = () => {
   const activeProjectCount = projectPool.length;
   const openTaskCount = taskPool.filter((task) => task.status !== 'Done').length;
   const dueTodayCount = taskPool.filter((task) => {
-    const dueDate = task.dueDate ? new Date(task.dueDate) : null;
-    return dueDate && dueDate.toDateString() === new Date().toDateString() && task.status !== 'Done';
+    const dueDateKey = getDateKeyInTimeZone(task.dueDate, userTimeZone);
+    return dueDateKey && dueDateKey === getDateKeyInTimeZone(new Date(), userTimeZone) && task.status !== 'Done';
   }).length;
   const overdueCount = taskPool.filter((task) => {
-    const dueDate = task.dueDate ? new Date(task.dueDate) : null;
-    return dueDate && dueDate < new Date(new Date().setHours(0, 0, 0, 0)) && task.status !== 'Done';
+    const dueDateKey = getDateKeyInTimeZone(task.dueDate, userTimeZone);
+    return dueDateKey && dueDateKey < getDateKeyInTimeZone(new Date(), userTimeZone) && task.status !== 'Done';
   }).length;
 
   const unreadCount = notifications.filter((item) => !item.read).length;
@@ -619,7 +622,7 @@ const DashboardPage = () => {
 
                             <div className="mt-5 flex items-center justify-between gap-3 text-xs font-medium text-slate-500">
                               <span>Deadline</span>
-                              <span>{formatDateLabel(deadline)}</span>
+                              <span>{formatDateLabel(deadline, userTimeZone)}</span>
                             </div>
 
                             <div className="mt-2 h-2 rounded-full bg-slate-100">
@@ -668,7 +671,7 @@ const DashboardPage = () => {
                         <button
                           key={taskId}
                           onClick={() => setSelectedTask(task)}
-                          className={`w-full rounded-2xl border p-4 text-left transition hover:shadow-sm ${getTaskTone(task)}`}
+                          className={`w-full rounded-2xl border p-4 text-left transition hover:shadow-sm ${getTaskTone(task, userTimeZone)}`}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
@@ -680,11 +683,11 @@ const DashboardPage = () => {
 
                           <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                             <span className="inline-flex items-center gap-1 rounded-full bg-white/80 px-2.5 py-1">
-                              <Calendar size={13} /> {formatDateLabel(task.dueDate)}
+                              <Calendar size={13} /> {formatDateLabel(task.dueDate, userTimeZone)}
                             </span>
                             {task.dueDate && (
                               <span className="inline-flex items-center gap-1 rounded-full bg-white/80 px-2.5 py-1">
-                                <Clock size={13} /> {formatRelativeTime(task.dueDate)}
+                                <Clock size={13} /> {formatRelativeTime(task.dueDate, userTimeZone)}
                               </span>
                             )}
                           </div>
@@ -751,7 +754,7 @@ const DashboardPage = () => {
                               <p className="text-sm font-semibold text-slate-900">{meeting.title}</p>
                             </div>
                             <p className="mt-1 text-xs text-slate-500">{meeting.projectTitle}</p>
-                            <p className="mt-2 text-sm text-slate-600">{formatDateLabel(meeting.scheduledFor, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</p>
+                            <p className="mt-2 text-sm text-slate-600">{formatDateLabel(meeting.scheduledFor, userTimeZone, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</p>
                           </div>
                           <ArrowUpRight size={16} className="mt-1 text-slate-400" />
                         </div>
@@ -851,7 +854,7 @@ const DashboardPage = () => {
               <div className="flex flex-wrap gap-2">
                 <Badge tone={getPriorityTone(selectedTask.priority)}>{selectedTask.priority || 'Medium'}</Badge>
                 <Badge tone="neutral">{selectedTask.status}</Badge>
-                {selectedTask.dueDate && <Badge tone="neutral">Due {formatDateLabel(selectedTask.dueDate)}</Badge>}
+                {selectedTask.dueDate && <Badge tone="neutral">Due {formatDateLabel(selectedTask.dueDate, userTimeZone)}</Badge>}
               </div>
               {selectedTask.description && (
                 <div>
@@ -866,8 +869,8 @@ const DashboardPage = () => {
                 </div>
                 <div className="rounded-2xl bg-slate-50 p-4">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Due date</p>
-                  <p className="mt-2 text-sm font-medium text-slate-900">{formatDateLabel(selectedTask.dueDate, { weekday: 'short', month: 'short', day: 'numeric' })}</p>
-                  {selectedTask.dueDate && <p className="mt-1 text-xs text-slate-500">{formatRelativeTime(selectedTask.dueDate)}</p>}
+                  <p className="mt-2 text-sm font-medium text-slate-900">{formatDateLabel(selectedTask.dueDate, userTimeZone, { weekday: 'short', month: 'short', day: 'numeric' })}</p>
+                  {selectedTask.dueDate && <p className="mt-1 text-xs text-slate-500">{formatRelativeTime(selectedTask.dueDate, userTimeZone)}</p>}
                 </div>
                 <div className="rounded-2xl bg-slate-50 p-4">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Assigned by</p>

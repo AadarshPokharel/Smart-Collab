@@ -1,4 +1,9 @@
 import React from 'react';
+import { useAuth } from '../contexts/AuthContext';
+import {
+  formatDateTimeInTimeZone,
+  getUserTimezone,
+} from '../utils/userPreferences';
 
 const NotificationDropdown = ({
   notifications,
@@ -9,6 +14,9 @@ const NotificationDropdown = ({
   emptyLabel = 'No new notifications',
   panelClassName = 'absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded-xl shadow-xl p-4',
 }) => {
+  const { user } = useAuth();
+  const userTimeZone = getUserTimezone(user);
+
   return (
     <div className={panelClassName}>
       <div className="flex items-center justify-between mb-3">
@@ -31,13 +39,10 @@ const NotificationDropdown = ({
             const isRead = !!note?.read;
             const title = note?.title || note?.text || note?.message || 'Notification';
             const message = note?.message || note?.text || title;
-            const time =
-              note?.time ||
-              (note?.createdAt
-                ? new Date(note.createdAt).toLocaleString()
-                : note?.timestamp
-                  ? new Date(note.timestamp).toLocaleString()
-                  : '');
+            const timeValue = note?.createdAt || note?.timestamp || null;
+            const time = timeValue
+              ? formatDateTimeInTimeZone(timeValue, userTimeZone, undefined, '')
+              : note?.time || '';
 
             return (
               <div

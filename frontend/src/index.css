@@ -18,6 +18,95 @@ body {
   color: #111827;
 }
 
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+:root[data-theme='dark'] body {
+  background: linear-gradient(180deg, #020617 0%, #0f172a 100%);
+  color: #e2e8f0;
+}
+
+:root[data-theme='dark'] .bg-white,
+:root[data-theme='dark'] .bg-white\/90 {
+  background-color: rgba(15, 23, 42, 0.94);
+}
+
+:root[data-theme='dark'] .bg-slate-50,
+:root[data-theme='dark'] .bg-slate-50\/80,
+:root[data-theme='dark'] .bg-slate-50\/70 {
+  background-color: rgba(15, 23, 42, 0.82);
+}
+
+:root[data-theme='dark'] .bg-slate-100,
+:root[data-theme='dark'] .bg-slate-100\/70,
+:root[data-theme='dark'] .bg-gray-100 {
+  background-color: rgba(30, 41, 59, 0.94);
+}
+
+:root[data-theme='dark'] .bg-gray-200 {
+  background-color: rgba(51, 65, 85, 0.94);
+}
+
+:root[data-theme='dark'] .border-slate-100,
+:root[data-theme='dark'] .border-slate-200,
+:root[data-theme='dark'] .border-slate-200\/70,
+:root[data-theme='dark'] .border-gray-100,
+:root[data-theme='dark'] .border-gray-200 {
+  border-color: rgba(71, 85, 105, 0.92);
+}
+
+:root[data-theme='dark'] .text-slate-900,
+:root[data-theme='dark'] .text-gray-900 {
+  color: #f8fafc;
+}
+
+:root[data-theme='dark'] .text-slate-700,
+:root[data-theme='dark'] .text-gray-700 {
+  color: #e2e8f0;
+}
+
+:root[data-theme='dark'] .text-slate-600,
+:root[data-theme='dark'] .text-gray-600 {
+  color: #cbd5e1;
+}
+
+:root[data-theme='dark'] .text-slate-500,
+:root[data-theme='dark'] .text-gray-500 {
+  color: #94a3b8;
+}
+
+:root[data-theme='dark'] .text-slate-400,
+:root[data-theme='dark'] .text-gray-400 {
+  color: #64748b;
+}
+
+:root[data-theme='dark'] .hover\:bg-slate-50:hover,
+:root[data-theme='dark'] .hover\:bg-slate-100:hover,
+:root[data-theme='dark'] .hover\:bg-gray-50:hover,
+:root[data-theme='dark'] .hover\:bg-gray-100:hover,
+:root[data-theme='dark'] .hover\:bg-gray-200:hover {
+  background-color: rgba(30, 41, 59, 0.96);
+}
+
+:root[data-theme='dark'] .hover\:text-slate-900:hover,
+:root[data-theme='dark'] .hover\:text-gray-900:hover,
+:root[data-theme='dark'] .hover\:text-slate-700:hover,
+:root[data-theme='dark'] .hover\:text-gray-700:hover {
+  color: #f8fafc;
+}
+
+:root[data-theme='dark'] input,
+:root[data-theme='dark'] textarea,
+:root[data-theme='dark'] select {
+  color: #f8fafc;
+}
+
+:root[data-theme='dark'] input::placeholder,
+:root[data-theme='dark'] textarea::placeholder {
+  color: #94a3b8;
+}
+
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;

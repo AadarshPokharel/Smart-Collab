@@ -19,46 +19,55 @@ import api from '../services/api';
 import { createDemoWorkspace as seedDemoWorkspace } from '../api/projectsApi';
 import WorkspaceLayout from '../components/WorkspaceLayout';
 import { normalizeNotifications } from '../utils/notifications';
+import {
+  formatDateInTimeZone,
+  formatDateTimeInTimeZone,
+  getUserTimezone,
+} from '../utils/userPreferences';
 
 const POLL_INTERVAL_MS = 12000;
 
-const formatRelativeTime = (dateString) => {
+const formatRelativeTime = (dateString, timeZone) => {
   if (!dateString) return '';
 
   const date = new Date(dateString);
   if (Number.isNaN(date.getTime())) return '';
 
-  const now = new Date();
-  const diffMs = now - date;
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
+  const diffMs = date.getTime() - Date.now();
+  const diffMins = Math.round(diffMs / 60000);
+  const diffHours = Math.round(diffMins / 60);
+  const diffDays = Math.round(diffHours / 24);
 
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
+  if (Math.abs(diffMins) < 1) return 'Just now';
+  if (Math.abs(diffMins) < 60) return diffMins >= 0 ? `in ${diffMins}m` : `${Math.abs(diffMins)}m ago`;
+  if (Math.abs(diffHours) < 24) return diffHours >= 0 ? `in ${diffHours}h` : `${Math.abs(diffHours)}h ago`;
+  if (Math.abs(diffDays) < 7) return diffDays >= 0 ? `in ${diffDays}d` : `${Math.abs(diffDays)}d ago`;
 
-  return date.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return formatDateInTimeZone(
+    dateString,
+    timeZone,
+    {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    },
+    ''
+  );
 };
 
-const formatMessageTime = (dateString) => {
-  if (!dateString) return '';
-  const date = new Date(dateString);
-  if (Number.isNaN(date.getTime())) return '';
-
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-};
+const formatMessageTime = (dateString, timeZone) =>
+  formatDateTimeInTimeZone(
+    dateString,
+    timeZone,
+    {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    },
+    ''
+  );
 
 const getAvatarColor = (userId = '') => {
   const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
@@ -81,6 +90,7 @@ const getErrorMessage = (error, fallback) =>
 export default function MessagesPage() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const userTimeZone = getUserTimezone(user);
   const currentUserId = user?._id || '';
 
   const [conversations, setConversations] = useState([]);
@@ -490,7 +500,7 @@ export default function MessagesPage() {
                           {conversation.nextMeeting?.scheduledFor ? (
                             <span className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-700">
                               <CalendarClock size={12} />
-                              {formatRelativeTime(conversation.nextMeeting.scheduledFor)}
+                              {formatRelativeTime(conversation.nextMeeting.scheduledFor, userTimeZone)}
                             </span>
                           ) : null}
                           {conversation.sharedResourcesCount > 0 ? (
@@ -509,7 +519,7 @@ export default function MessagesPage() {
                           </span>
                         )}
                         <span className="text-[11px] text-slate-400">
-                          {formatRelativeTime(conversation.latestMessageTime)}
+                          {formatRelativeTime(conversation.latestMessageTime, userTimeZone)}
                         </span>
                       </div>
                     </div>
@@ -561,12 +571,12 @@ export default function MessagesPage() {
                         </span>
                         <span className="inline-flex items-center gap-1">
                           <Clock3 size={14} />
-                          Last active {formatRelativeTime(selectedConversation.latestMessageTime)}
+                          Last active {formatRelativeTime(selectedConversation.latestMessageTime, userTimeZone)}
                         </span>
                         {lastSyncedAt ? (
                           <span className="inline-flex items-center gap-1">
                             <RefreshCcw size={14} />
-                            Synced {formatRelativeTime(lastSyncedAt)}
+                            Synced {formatRelativeTime(lastSyncedAt, userTimeZone)}
                           </span>
                         ) : null}
                       </div>
@@ -584,7 +594,7 @@ export default function MessagesPage() {
                           Next meeting: {selectedConversation.nextMeeting.title}
                         </p>
                         <p className="mt-1">
-                          {formatMessageTime(selectedConversation.nextMeeting.scheduledFor)}
+                          {formatMessageTime(selectedConversation.nextMeeting.scheduledFor, userTimeZone)}
                         </p>
                         {selectedConversation.nextMeeting.meetingLink ? (
                           <a
@@ -671,7 +681,7 @@ export default function MessagesPage() {
                           </div>
 
                           <span className="mt-2 text-xs text-slate-400">
-                            {formatMessageTime(message.createdAt)}
+                            {formatMessageTime(message.createdAt, userTimeZone)}
                           </span>
                         </div>
                       </div>
