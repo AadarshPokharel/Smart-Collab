@@ -16,7 +16,6 @@ import {
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
-import { createDemoWorkspace as seedDemoWorkspace } from '../api/projectsApi';
 import WorkspaceLayout from '../components/WorkspaceLayout';
 import { normalizeNotifications } from '../utils/notifications';
 import {
@@ -106,7 +105,6 @@ export default function MessagesPage() {
   const [messageError, setMessageError] = useState('');
   const [notifications, setNotifications] = useState([]);
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
-  const [creatingDemoWorkspace, setCreatingDemoWorkspace] = useState(false);
   const messagesEndRef = useRef(null);
 
   const handleLogout = () => {
@@ -357,21 +355,6 @@ export default function MessagesPage() {
     }
   };
 
-  const handleCreateDemoWorkspace = async () => {
-    if (creatingDemoWorkspace) return;
-
-    try {
-      setCreatingDemoWorkspace(true);
-      const response = await seedDemoWorkspace();
-      await loadConversations({ showSpinner: true });
-      toast.success(response?.message || 'Demo workspace is ready');
-    } catch (error) {
-      toast.error(error?.message || error?.response?.data?.message || 'Failed to create demo workspace');
-    } finally {
-      setCreatingDemoWorkspace(false);
-    }
-  };
-
   const hasProjects = conversations.length > 0;
 
   return (
@@ -448,12 +431,11 @@ export default function MessagesPage() {
               </p>
               <div className="mt-5 flex flex-col items-center gap-3 sm:flex-row">
                 <button
-                  onClick={handleCreateDemoWorkspace}
-                  disabled={creatingDemoWorkspace}
-                  className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  onClick={() => navigate('/projects', { state: { openCreate: true } })}
+                  className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700"
                 >
-                  {creatingDemoWorkspace ? <Loader2 size={16} className="animate-spin" /> : <MessageSquare size={16} />}
-                  {creatingDemoWorkspace ? 'Preparing Demo' : 'Create Demo Workspace'}
+                  <MessageSquare size={16} />
+                  Create project
                 </button>
                 <button
                   onClick={() => navigate('/projects')}

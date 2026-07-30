@@ -26,13 +26,13 @@ import {
 import api from '../services/api';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
-import { createDemoWorkspace as seedDemoWorkspace } from '../api/projectsApi';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
 import NotificationDropdown from '../components/NotificationDropdown';
 import { normalizeNotifications } from '../utils/notifications';
+import { getInitialSidebarOpen } from '../utils/sidebarState';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -139,7 +139,7 @@ const ProjectsPage = () => {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const loadErrorShownRef = useRef(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(getInitialSidebarOpen);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('Active');
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -152,7 +152,6 @@ const ProjectsPage = () => {
   const [editLoading, setEditLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [archiveLoadingId, setArchiveLoadingId] = useState('');
-  const [creatingDemoWorkspace, setCreatingDemoWorkspace] = useState(false);
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -605,21 +604,6 @@ const ProjectsPage = () => {
     }
   };
 
-  const handleCreateDemoWorkspace = async () => {
-    if (creatingDemoWorkspace) return;
-
-    try {
-      setCreatingDemoWorkspace(true);
-      const response = await seedDemoWorkspace();
-      await fetchProjects({ silent: true });
-      toast.success(response?.message || 'Demo workspace is ready');
-    } catch (error) {
-      toast.error(error?.message || error?.response?.data?.message || 'Failed to create demo workspace');
-    } finally {
-      setCreatingDemoWorkspace(false);
-    }
-  };
-
   const now = getNowMs();
   const filteredProjects = projects.filter((project) => {
     const matchesSearch =
@@ -720,6 +704,7 @@ const ProjectsPage = () => {
                 <button
                   className="p-2 rounded-lg hover:bg-slate-100"
                   onClick={() => setIsSidebarOpen((prev) => !prev)}
+                  aria-label={isSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
                   title={isSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
                 >
                   <Menu size={20} />
@@ -822,14 +807,6 @@ const ProjectsPage = () => {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <button
-              onClick={handleCreateDemoWorkspace}
-              disabled={creatingDemoWorkspace}
-              className="flex items-center gap-2 border border-slate-200 bg-white px-4 py-2 rounded-lg text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {creatingDemoWorkspace ? <Loader2 size={16} className="animate-spin" /> : <FolderOpen size={16} />}
-              {creatingDemoWorkspace ? 'Preparing Demo' : 'Create Demo Workspace'}
-            </button>
-            <button
               onClick={() => setShowCreateModal(true)}
               className="flex items-center gap-2 bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg transition-colors"
             >
@@ -875,23 +852,13 @@ const ProjectsPage = () => {
                   ? 'Create your first project to get started'
                   : 'No projects match your filters'}
               </p>
-              <div className="mt-2 flex flex-col items-center gap-3 sm:flex-row">
-                <button
-                  onClick={handleCreateDemoWorkspace}
-                  disabled={creatingDemoWorkspace}
-                  className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                >
-                  {creatingDemoWorkspace ? <Loader2 size={16} className="animate-spin" /> : <FolderKanban size={16} />}
-                  {creatingDemoWorkspace ? 'Preparing Demo' : 'Create Demo Workspace'}
-                </button>
-                <button
-                  onClick={() => setShowCreateModal(true)}
-                  className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-                >
-                  <Plus size={16} />
-                  Create Blank Project
-                </button>
-              </div>
+              <button
+                onClick={() => setShowCreateModal(true)}
+                className="mt-2 inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700"
+              >
+                <Plus size={16} />
+                Create Project
+              </button>
             </div>
           </div>
         )}

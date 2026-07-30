@@ -27,7 +27,6 @@ import { useAuth } from '../contexts/AuthContext';
 import NotificationDropdown from '../components/NotificationDropdown';
 import { normalizeNotifications } from '../utils/notifications';
 import api from '../services/api';
-import { createDemoWorkspace as seedDemoWorkspace } from '../api/projectsApi';
 import { projectService, taskService } from '../services';
 import {
   formatDateInTimeZone,
@@ -35,6 +34,7 @@ import {
   getDateKeyInTimeZone,
   getUserTimezone,
 } from '../utils/userPreferences';
+import { getInitialSidebarOpen } from '../utils/sidebarState';
 
 const TASK_STATUSES = ['To Do', 'In Progress', 'In Review', 'Done'];
 const TASK_PRIORITIES = ['Low', 'Medium', 'High'];
@@ -336,7 +336,7 @@ export default function TasksPage() {
   const { user, logout } = useAuth();
   const userTimeZone = getUserTimezone(user);
 
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(getInitialSidebarOpen);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const profileMenuRef = useRef(null);
@@ -355,7 +355,6 @@ export default function TasksPage() {
   const [savingTask, setSavingTask] = useState(false);
   const [deletingTaskId, setDeletingTaskId] = useState('');
   const [updatingStatusId, setUpdatingStatusId] = useState('');
-  const [creatingDemoWorkspace, setCreatingDemoWorkspace] = useState(false);
   const [formError, setFormError] = useState('');
   const [taskForm, setTaskForm] = useState({
     title: '',
@@ -740,21 +739,6 @@ export default function TasksPage() {
     }
   };
 
-  const handleCreateDemoWorkspace = async () => {
-    if (creatingDemoWorkspace) return;
-
-    try {
-      setCreatingDemoWorkspace(true);
-      const response = await seedDemoWorkspace();
-      await Promise.all([loadTaskPageData({ showSpinner: false }), loadNotifications()]);
-      toast.success(response?.message || 'Demo workspace is ready');
-    } catch (error) {
-      toast.error(error?.message || error?.response?.data?.message || 'Failed to create demo workspace');
-    } finally {
-      setCreatingDemoWorkspace(false);
-    }
-  };
-
   const emptyStateMessage = tasks.length === 0
     ? 'No tasks have been created yet.'
     : 'No tasks match your current search or filter.';
@@ -763,8 +747,10 @@ export default function TasksPage() {
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <div className="flex">
         <aside
-          className={`fixed inset-y-0 left-0 z-40 w-72 bg-white border-r border-slate-200/70 px-6 py-6 flex flex-col gap-10 transition-transform duration-200 lg:static lg:translate-x-0 ${
-            isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+          className={`fixed inset-y-0 left-0 z-40 flex flex-col gap-10 overflow-hidden border-r border-slate-200/70 bg-white py-6 transition-all duration-200 lg:static ${
+            isSidebarOpen
+              ? 'translate-x-0 w-72 px-6 lg:w-72 lg:px-6'
+              : '-translate-x-full w-0 px-0 lg:-translate-x-full lg:w-0 lg:px-0'
           }`}
         >
           <div className="flex items-center gap-3">
@@ -798,9 +784,10 @@ export default function TasksPage() {
             <div className="flex items-center justify-between px-6 py-4 lg:px-10">
               <div className="flex items-center gap-3">
                 <button
-                  className="rounded-lg p-2 hover:bg-slate-100 lg:hidden"
-                  onClick={() => setIsSidebarOpen(true)}
-                  aria-label="Open sidebar"
+                  className="rounded-lg p-2 hover:bg-slate-100"
+                  onClick={() => setIsSidebarOpen((current) => !current)}
+                  aria-label={isSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+                  title={isSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
                 >
                   <Menu size={20} />
                 </button>
@@ -1019,14 +1006,6 @@ export default function TasksPage() {
                           Go to projects
                         </button>
                       )}
-                      <button
-                        onClick={handleCreateDemoWorkspace}
-                        disabled={creatingDemoWorkspace}
-                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {creatingDemoWorkspace ? <Loader2 size={16} className="animate-spin" /> : <MessageSquare size={16} />}
-                        {creatingDemoWorkspace ? 'Preparing Demo' : 'Create Demo Workspace'}
-                      </button>
                     </div>
                   )}
                 </div>

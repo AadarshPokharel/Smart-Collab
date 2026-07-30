@@ -997,7 +997,7 @@ export default function ProjectPage() {
                     value={taskForm.title}
                     onChange={(event) => setTaskForm((current) => ({ ...current, title: event.target.value }))}
                     className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"
-                    placeholder="Sprint demo checklist"
+                    placeholder="Sprint planning checklist"
                   />
                 </div>
                 <div className="md:col-span-2">
@@ -1367,7 +1367,7 @@ export default function ProjectPage() {
 
           <SectionCard
             title={editingResourceId ? 'Edit Shared Resource' : 'Share Link or File Metadata'}
-            description="Use link and file metadata first so the workflow is demo-ready without full storage infrastructure."
+            description="Share important links and file details with your team in one place."
           >
             <form onSubmit={handleResourceSubmit} className="space-y-4">
               <div>
