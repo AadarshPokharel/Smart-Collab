@@ -165,6 +165,21 @@ const serializePendingInvite = (invite) => {
   };
 };
 
+const serializePendingRoleChange = (request) => {
+  if (!request) return null;
+
+  return {
+    id: toObjectIdString(request._id) || null,
+    _id: request._id || null,
+    currentRole: request.currentRole || 'Member',
+    requestedRole: request.requestedRole || 'ProjectManager',
+    status: request.status || 'pending',
+    createdAt: request.createdAt || null,
+    user: mapUserBrief(request.user),
+    requestedBy: mapUserBrief(request.requestedBy),
+  };
+};
+
 const serializeProjectSummary = (project, stats = buildEmptyTaskStats()) => {
   const meetings = Array.isArray(project?.meetings) ? project.meetings : [];
   const resources = Array.isArray(project?.sharedResources) ? project.sharedResources : [];
@@ -205,6 +220,10 @@ const serializeProjectDetail = (project, stats = buildEmptyTaskStats()) => {
       .sort((left, right) => new Date(right?.createdAt || 0) - new Date(left?.createdAt || 0))
       .map(serializePendingInvite)
       .filter(Boolean),
+    pendingRoleChanges: [...(project?.pendingRoleChanges || [])]
+      .sort((left, right) => new Date(right?.createdAt || 0) - new Date(left?.createdAt || 0))
+      .map(serializePendingRoleChange)
+      .filter(Boolean),
     meetings: sortMeetings(project?.meetings || []).map(serializeMeeting).filter(Boolean),
     sharedResources: [...(project?.sharedResources || [])]
       .sort((left, right) => new Date(right?.createdAt || 0) - new Date(left?.createdAt || 0))
@@ -220,6 +239,7 @@ module.exports = {
   serializeMeeting,
   serializeResource,
   serializePendingInvite,
+  serializePendingRoleChange,
   serializeProjectSummary,
   serializeProjectDetail,
 };

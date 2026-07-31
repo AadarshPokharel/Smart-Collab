@@ -82,6 +82,15 @@ const snapshotPendingInviteForActivity = (invite, fallbackUser = null) => ({
   status: invite?.status || 'pending',
 });
 
+const snapshotPendingRoleChangeForActivity = (request, fallbackUser = null) => ({
+  requestId: toObjectIdString(request?._id),
+  memberId: toObjectIdString(request?.user) || toObjectIdString(fallbackUser?._id),
+  memberName: getDisplayName(request?.user || fallbackUser),
+  currentRole: request?.currentRole || 'Member',
+  requestedRole: request?.requestedRole || 'ProjectManager',
+  status: request?.status || 'pending',
+});
+
 const snapshotMeetingForActivity = (meeting) => ({
   title: meeting?.title || '',
   description: meeting?.description || '',
@@ -141,6 +150,30 @@ const getPendingInviteRecord = (project, { invitationId = null, userId = null, e
   return null;
 };
 
+const getPendingRoleChangeRecord = (project, { requestId = null, userId = null, requestedRole = '' } = {}) => {
+  const requests = Array.isArray(project?.pendingRoleChanges) ? project.pendingRoleChanges : [];
+
+  if (requestId) {
+    return (
+      requests.find((request) => toObjectIdString(request?._id) === toObjectIdString(requestId)) ||
+      null
+    );
+  }
+
+  if (userId) {
+    const normalizedUserId = toObjectIdString(userId);
+    return (
+      requests.find((request) => {
+        const sameUser = toObjectIdString(request?.user) === normalizedUserId;
+        const sameRole = requestedRole ? request?.requestedRole === requestedRole : true;
+        return sameUser && sameRole;
+      }) || null
+    );
+  }
+
+  return null;
+};
+
 const populateProjectRelations = async (project, { detail = false } = {}) => {
   await project.populate('owner', 'firstName lastName email avatar');
   await project.populate({
@@ -149,6 +182,10 @@ const populateProjectRelations = async (project, { detail = false } = {}) => {
   });
   await project.populate({
     path: 'pendingInvites.user pendingInvites.invitedBy',
+    select: 'firstName lastName email avatar',
+  });
+  await project.populate({
+    path: 'pendingRoleChanges.user pendingRoleChanges.requestedBy',
     select: 'firstName lastName email avatar',
   });
 
@@ -959,6 +996,360 @@ exports.declineInvite = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: `Invitation to “${project.title}” declined.`,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.requestRoleChange = async (req, res) => {
+  try {
+    const { memberId, role = 'ProjectManager' } = req.body;
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found',
+      });
+    }
+
+    if (!canManageProject(project, req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only project owner can manage project access',
+      });
+    }
+
+    if (role !== 'ProjectManager') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only project admin access can be requested here',
+      });
+    }
+
+    const memberRecord = getProjectMemberRecord(project, memberId);
+    if (!memberRecord) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project member not found',
+      });
+    }
+
+    if (toObjectIdString(memberRecord.user) === toObjectIdString(project.owner)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Project owner already has full access',
+      });
+    }
+
+    if (memberRecord.role === role) {
+      return res.status(400).json({
+        success: false,
+        message: 'This member already has project admin access',
+      });
+    }
+
+    const pendingRequest = getPendingRoleChangeRecord(project, {
+      userId: memberRecord.user,
+      requestedRole: role,
+    });
+
+    if (pendingRequest) {
+      return res.status(400).json({
+        success: false,
+        message: 'An admin access request is already pending for this member',
+      });
+    }
+
+    const actorName = getDisplayName(req.user);
+    const memberUser = await User.findById(memberRecord.user).select('firstName lastName email');
+
+    if (!memberUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project member not found',
+      });
+    }
+
+    project.pendingRoleChanges.push({
+      user: memberUser._id,
+      currentRole: memberRecord.role || 'Member',
+      requestedRole: role,
+      requestedBy: req.user._id,
+    });
+    await project.save();
+
+    const pendingRoleChange =
+      project.pendingRoleChanges[project.pendingRoleChanges.length - 1];
+
+    await createNotification({
+      user: memberUser._id,
+      type: 'ProjectRoleRequest',
+      title: 'Project admin access request',
+      message: `${actorName} requested project admin access for you in “${project.title}”.`,
+      entityType: 'Project',
+      entityId: project._id,
+      metadata: {
+        projectId: toObjectIdString(project._id),
+        roleRequestId: toObjectIdString(pendingRoleChange?._id),
+        currentRole: memberRecord.role || 'Member',
+        requestedRole: role,
+        roleRequestStatus: 'pending',
+        requestedById: toObjectIdString(req.user._id),
+        requestedByName: actorName,
+        projectTitle: project.title,
+      },
+    });
+
+    await recordActivitySafely({
+      projectId: project._id,
+      userId: req.user._id,
+      actionType: 'role_requested',
+      entityType: 'project',
+      entityId: memberUser._id,
+      title: memberUser.email || getDisplayName(memberUser),
+      description: `requested project admin access for ${getDisplayName(memberUser)} in “${project.title}”`,
+      newValue: snapshotPendingRoleChangeForActivity(pendingRoleChange, memberUser),
+      projectTitle: project.title,
+      userName: actorName,
+      entityTitle: getDisplayName(memberUser),
+      metadata: {
+        projectTitle: project.title,
+        userName: actorName,
+        entityTitle: getDisplayName(memberUser),
+        requestedRole: role,
+        roleRequestId: toObjectIdString(pendingRoleChange?._id),
+      },
+    });
+
+    const payload = await buildProjectPayload(project, { detail: true });
+
+    return res.status(200).json({
+      success: true,
+      data: payload,
+      message: 'Project admin access request sent. Waiting for acceptance.',
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.acceptRoleChange = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found',
+      });
+    }
+
+    const roleRequest = getPendingRoleChangeRecord(project, {
+      requestId: req.params.requestId,
+    });
+
+    if (!roleRequest) {
+      return res.status(404).json({
+        success: false,
+        message: 'Access request not found or already handled',
+      });
+    }
+
+    if (toObjectIdString(roleRequest.user) !== toObjectIdString(req.user._id)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only respond to your own access request',
+      });
+    }
+
+    const actorName = getDisplayName(req.user);
+    const requestedById = toObjectIdString(roleRequest.requestedBy);
+    const roleRequestSnapshot = snapshotPendingRoleChangeForActivity(roleRequest, req.user);
+    const memberRecord = getProjectMemberRecord(project, req.user._id);
+
+    if (!memberRecord) {
+      return res.status(404).json({
+        success: false,
+        message: 'You are no longer a member of this project',
+      });
+    }
+
+    memberRecord.role = roleRequest.requestedRole || 'ProjectManager';
+    roleRequest.deleteOne();
+    await project.save();
+
+    await Notification.updateMany(
+      {
+        user: req.user._id,
+        type: 'ProjectRoleRequest',
+        entityId: project._id,
+        'metadata.roleRequestId': toObjectIdString(req.params.requestId),
+      },
+      {
+        $set: {
+          read: true,
+          'metadata.roleRequestStatus': 'accepted',
+        },
+      }
+    );
+
+    if (requestedById && requestedById !== toObjectIdString(req.user._id)) {
+      await createNotification({
+        user: requestedById,
+        type: 'Info',
+        title: 'Access request accepted',
+        message: `${actorName} accepted project admin access in “${project.title}”.`,
+        entityType: 'Project',
+        entityId: project._id,
+        metadata: {
+          projectId: toObjectIdString(project._id),
+          memberId: toObjectIdString(req.user._id),
+          memberName: actorName,
+          role: memberRecord.role,
+        },
+      });
+    }
+
+    await recordActivitySafely({
+      projectId: project._id,
+      userId: req.user._id,
+      actionType: 'role_changed',
+      entityType: 'project',
+      entityId: req.user._id,
+      title: req.user.email || actorName,
+      description: `${actorName} accepted project admin access in “${project.title}”`,
+      oldValue: roleRequestSnapshot,
+      newValue: {
+        memberId: toObjectIdString(req.user._id),
+        memberName: actorName,
+        role: memberRecord.role,
+      },
+      projectTitle: project.title,
+      userName: actorName,
+      entityTitle: actorName,
+      metadata: {
+        projectTitle: project.title,
+        userName: actorName,
+        entityTitle: actorName,
+        role: memberRecord.role,
+      },
+    });
+
+    const payload = await buildProjectPayload(project, { detail: true });
+
+    return res.status(200).json({
+      success: true,
+      data: payload,
+      message: `You now have project admin access in “${project.title}”.`,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.declineRoleChange = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found',
+      });
+    }
+
+    const roleRequest = getPendingRoleChangeRecord(project, {
+      requestId: req.params.requestId,
+    });
+
+    if (!roleRequest) {
+      return res.status(404).json({
+        success: false,
+        message: 'Access request not found or already handled',
+      });
+    }
+
+    if (toObjectIdString(roleRequest.user) !== toObjectIdString(req.user._id)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only respond to your own access request',
+      });
+    }
+
+    const actorName = getDisplayName(req.user);
+    const requestedById = toObjectIdString(roleRequest.requestedBy);
+    const roleRequestSnapshot = snapshotPendingRoleChangeForActivity(roleRequest, req.user);
+
+    roleRequest.deleteOne();
+    await project.save();
+
+    await Notification.updateMany(
+      {
+        user: req.user._id,
+        type: 'ProjectRoleRequest',
+        entityId: project._id,
+        'metadata.roleRequestId': toObjectIdString(req.params.requestId),
+      },
+      {
+        $set: {
+          read: true,
+          'metadata.roleRequestStatus': 'declined',
+        },
+      }
+    );
+
+    if (requestedById && requestedById !== toObjectIdString(req.user._id)) {
+      await createNotification({
+        user: requestedById,
+        type: 'Info',
+        title: 'Access request declined',
+        message: `${actorName} declined project admin access in “${project.title}”.`,
+        entityType: 'Project',
+        entityId: project._id,
+        metadata: {
+          projectId: toObjectIdString(project._id),
+          memberId: toObjectIdString(req.user._id),
+          memberName: actorName,
+        },
+      });
+    }
+
+    await recordActivitySafely({
+      projectId: project._id,
+      userId: req.user._id,
+      actionType: 'declined',
+      entityType: 'project',
+      entityId: req.user._id,
+      title: req.user.email || actorName,
+      description: `${actorName} declined project admin access in “${project.title}”`,
+      oldValue: roleRequestSnapshot,
+      projectTitle: project.title,
+      userName: actorName,
+      entityTitle: actorName,
+      metadata: {
+        projectTitle: project.title,
+        userName: actorName,
+        entityTitle: actorName,
+      },
+    });
+
+    const payload = await buildProjectPayload(project, { detail: true });
+
+    return res.status(200).json({
+      success: true,
+      data: payload,
+      message: `Project admin access declined for “${project.title}”.`,
     });
   } catch (error) {
     return res.status(500).json({

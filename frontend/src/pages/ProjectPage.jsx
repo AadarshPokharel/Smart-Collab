@@ -10,12 +10,15 @@ import {
   Link2,
   Loader2,
   MessageSquare,
+  Download,
   Plus,
   RefreshCcw,
   Trash2,
+  Upload,
   UserPlus,
   Users,
   Video,
+  X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import ActivityList from '../components/ActivityList';
@@ -25,6 +28,12 @@ import { useAuth } from '../contexts/AuthContext';
 import { normalizeNotifications } from '../utils/notifications';
 import api from '../services/api';
 import { projectService, taskService } from '../services';
+import {
+  formatAllowedSubmissionFormats,
+  hasTaskSubmission,
+  readFileAsBase64,
+  triggerBlobDownload,
+} from '../utils/taskSubmission';
 
 const TAB_OPTIONS = ['overview', 'board', 'members', 'activity', 'collaboration', 'settings'];
 const PROJECT_ACTIVITY_FILTERS = [
@@ -104,6 +113,11 @@ const getStatusTone = (status) => {
   return 'bg-amber-50 text-amber-700 border-amber-100';
 };
 
+const canUploadTaskWork = (task, canManageTasks, user) => {
+  if (canManageTasks) return true;
+  return task?.assignedTo?._id === user?._id || task?.assignedTo?.id === user?._id;
+};
+
 const SectionCard = ({ title, description, actions = null, children }) => (
   <section className="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm">
     <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
@@ -146,6 +160,8 @@ const defaultTaskForm = {
   status: 'To Do',
   dueDate: '',
   assignedTo: '',
+  submissionRequired: false,
+  allowedSubmissionFormats: '',
 };
 
 const defaultMeetingForm = {
@@ -177,11 +193,18 @@ export default function ProjectPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [pageError, setPageError] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState('Member');
   const [inviteLoading, setInviteLoading] = useState(false);
+  const [roleRequestLoadingId, setRoleRequestLoadingId] = useState('');
   const [showTaskForm, setShowTaskForm] = useState(false);
   const [taskForm, setTaskForm] = useState(defaultTaskForm);
   const [taskSaving, setTaskSaving] = useState(false);
   const [taskActionId, setTaskActionId] = useState('');
+  const [submissionTask, setSubmissionTask] = useState(null);
+  const [submissionFile, setSubmissionFile] = useState(null);
+  const [submissionNote, setSubmissionNote] = useState('');
+  const [uploadingSubmissionId, setUploadingSubmissionId] = useState('');
+  const [downloadingSubmissionId, setDownloadingSubmissionId] = useState('');
   const [meetingForm, setMeetingForm] = useState(defaultMeetingForm);
   const [meetingSaving, setMeetingSaving] = useState(false);
   const [editingMeetingId, setEditingMeetingId] = useState('');
@@ -269,6 +292,12 @@ export default function ProjectPage() {
 
   const isOwner = project?.owner?._id === user?._id || user?.role === 'admin';
   const pendingInvites = Array.isArray(project?.pendingInvites) ? project.pendingInvites : [];
+  const pendingRoleChanges = Array.isArray(project?.pendingRoleChanges) ? project.pendingRoleChanges : [];
+  const pendingRoleChangeUserIds = new Set(
+    pendingRoleChanges
+      .map((request) => request?.user?._id || request?.user?.id)
+      .filter(Boolean)
+  );
   const canManageTasks = isOwner || currentMemberRole === 'ProjectManager';
   const canCollaborate = Boolean(project && (isOwner || currentMemberRole || project.owner?._id === user?._id));
 
@@ -417,6 +446,8 @@ export default function ProjectPage() {
         assignedTo: taskForm.assignedTo || null,
         dueDate: taskForm.dueDate ? new Date(taskForm.dueDate).toISOString() : null,
         dueTimezone: taskForm.dueDate ? Intl.DateTimeFormat().resolvedOptions().timeZone : null,
+        submissionRequired: taskForm.submissionRequired,
+        allowedSubmissionFormats: taskForm.allowedSubmissionFormats,
       });
 
       if (response.data?.task) {
@@ -443,6 +474,10 @@ export default function ProjectPage() {
 
     try {
       setTaskActionId(task._id);
+      if (nextStatus === 'Done' && task.submissionRequired && !hasTaskSubmission(task)) {
+        toast.error('Upload the required task work before marking this task as done.');
+        return;
+      }
       const response = await taskService.updateTaskStatus(task._id, nextStatus);
       const nextTask = response.data?.task;
 
@@ -475,6 +510,75 @@ export default function ProjectPage() {
     }
   };
 
+  const openSubmissionModal = (task) => {
+    setSubmissionTask(task);
+    setSubmissionFile(null);
+    setSubmissionNote(task?.submission?.note || '');
+  };
+
+  const handleUploadSubmission = async (event) => {
+    event.preventDefault();
+
+    if (!submissionTask?._id) return;
+    if (!submissionFile) {
+      toast.error('Choose a file to upload.');
+      return;
+    }
+
+    try {
+      setUploadingSubmissionId(submissionTask._id);
+      const contentBase64 = await readFileAsBase64(submissionFile);
+      const response = await taskService.uploadTaskSubmission(submissionTask._id, {
+        fileName: submissionFile.name,
+        mimeType: submissionFile.type,
+        contentBase64,
+        note: submissionNote.trim(),
+      });
+
+      const nextTask = response.data?.task;
+      if (nextTask?._id || nextTask?.id) {
+        setTasks((previous) =>
+          previous.map((item) =>
+            (item._id || item.id) === (nextTask._id || nextTask.id) ? nextTask : item
+          )
+        );
+      }
+
+      setSubmissionTask(null);
+      setSubmissionFile(null);
+      setSubmissionNote('');
+      toast.success(response.data?.message || 'Task work uploaded successfully');
+      loadNotifications().catch(() => {});
+    } catch (error) {
+      toast.error(
+        error?.response?.data?.message ||
+          error?.response?.data?.error ||
+          'Failed to upload task work'
+      );
+    } finally {
+      setUploadingSubmissionId('');
+    }
+  };
+
+  const handleDownloadSubmission = async (task) => {
+    const taskId = task?._id || task?.id;
+    if (!taskId || !task?.submission?.fileName) return;
+
+    try {
+      setDownloadingSubmissionId(taskId);
+      const response = await taskService.downloadTaskSubmission(taskId);
+      triggerBlobDownload(response.data, task.submission.fileName);
+    } catch (error) {
+      toast.error(
+        error?.response?.data?.message ||
+          error?.response?.data?.error ||
+          'Failed to download task work'
+      );
+    } finally {
+      setDownloadingSubmissionId('');
+    }
+  };
+
   const handleInviteMember = async (event) => {
     event.preventDefault();
     if (!inviteEmail.trim()) {
@@ -484,9 +588,13 @@ export default function ProjectPage() {
 
     try {
       setInviteLoading(true);
-      const response = await projectService.inviteMember(id, { email: inviteEmail.trim() });
+      const response = await projectService.inviteMember(id, {
+        email: inviteEmail.trim(),
+        role: inviteRole,
+      });
       updateProjectSnapshot(response.data?.data || project);
       setInviteEmail('');
+      setInviteRole('Member');
       toast.success(response.data?.message || 'Member invited successfully');
       loadNotifications().catch(() => {});
     } catch (error) {
@@ -497,6 +605,27 @@ export default function ProjectPage() {
       );
     } finally {
       setInviteLoading(false);
+    }
+  };
+
+  const handleRequestProjectAdminAccess = async (member) => {
+    const memberId = member?.user?._id;
+    if (!memberId) return;
+
+    try {
+      setRoleRequestLoadingId(memberId);
+      const response = await projectService.requestRoleChange(id, memberId, 'ProjectManager');
+      updateProjectSnapshot(response.data?.data || project);
+      toast.success(response.data?.message || 'Project admin access request sent successfully');
+      loadNotifications().catch(() => {});
+    } catch (error) {
+      toast.error(
+        error?.response?.data?.message ||
+          error?.response?.data?.error ||
+          'Failed to send project admin access request'
+      );
+    } finally {
+      setRoleRequestLoadingId('');
     }
   };
 
@@ -1060,6 +1189,42 @@ export default function ProjectPage() {
                     ))}
                   </select>
                 </div>
+                <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-white/70 p-4">
+                  <label className="flex items-center gap-3 text-sm font-semibold text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={taskForm.submissionRequired}
+                      onChange={(event) =>
+                        setTaskForm((current) => ({
+                          ...current,
+                          submissionRequired: event.target.checked,
+                          ...(event.target.checked ? {} : { allowedSubmissionFormats: '' }),
+                        }))
+                      }
+                      className="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-200"
+                    />
+                    Require uploaded task work before Done
+                  </label>
+                  {taskForm.submissionRequired ? (
+                    <div className="mt-4">
+                      <label className="block text-sm font-medium text-slate-700">Accepted file formats</label>
+                      <input
+                        value={taskForm.allowedSubmissionFormats}
+                        onChange={(event) =>
+                          setTaskForm((current) => ({
+                            ...current,
+                            allowedSubmissionFormats: event.target.value,
+                          }))
+                        }
+                        className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"
+                        placeholder="pdf, docx, zip, fig"
+                      />
+                      <p className="mt-2 text-xs text-slate-500">
+                        Leave blank to accept any file format.
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
                 <div className="md:col-span-2 flex justify-end gap-3">
                   <button
                     type="button"
@@ -1101,6 +1266,10 @@ export default function ProjectPage() {
                       items.map((task) => {
                         const canChangeStatus =
                           canManageTasks || task?.assignedTo?._id === user?._id;
+                        const canUploadSubmission = canUploadTaskWork(task, canManageTasks, user);
+                        const taskHasSubmission = hasTaskSubmission(task);
+                        const isUploadingThisTask = uploadingSubmissionId === (task._id || task.id);
+                        const isDownloadingThisTask = downloadingSubmissionId === (task._id || task.id);
                         return (
                           <div key={task._id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                             <div className="flex items-start justify-between gap-3">
@@ -1118,7 +1287,64 @@ export default function ProjectPage() {
                               <p>Assigned to: {getUserName(task.assignedTo) || 'Unassigned'}</p>
                               <p>Due: {task.dueDate ? formatDateLabel(task.dueDate) : 'No due date'}</p>
                             </div>
+                            {task.submissionRequired ? (
+                              <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-3">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                                  {taskHasSubmission ? 'Task work uploaded' : 'Submission required'}
+                                </p>
+                                <p className="mt-1 text-xs text-slate-600">
+                                  Accepted formats: {formatAllowedSubmissionFormats(task.allowedSubmissionFormats)}
+                                </p>
+                                {taskHasSubmission ? (
+                                  <div className="mt-2 space-y-1 text-xs text-slate-500">
+                                    <p>
+                                      File: <span className="font-medium text-slate-900">{task.submission.fileName}</span>
+                                    </p>
+                                    <p>
+                                      Uploaded by {getUserName(task.submission.uploadedBy)} on{' '}
+                                      {formatDateLabel(task.submission.uploadedAt)}
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <p className="mt-2 text-xs text-amber-700">
+                                    This task cannot move to Done until work is uploaded.
+                                  </p>
+                                )}
+                              </div>
+                            ) : null}
                             <div className="mt-4 flex items-center gap-2">
+                              {(taskHasSubmission || canUploadSubmission) && (
+                                <button
+                                  onClick={() =>
+                                    taskHasSubmission && !canUploadSubmission
+                                      ? handleDownloadSubmission(task)
+                                      : openSubmissionModal(task)
+                                  }
+                                  disabled={isUploadingThisTask || isDownloadingThisTask}
+                                  className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {taskHasSubmission && !canUploadSubmission ? (
+                                    <Download size={14} className="inline mr-1" />
+                                  ) : (
+                                    <Upload size={14} className="inline mr-1" />
+                                  )}
+                                  {taskHasSubmission && !canUploadSubmission ? 'Download Work' : taskHasSubmission ? 'Replace Work' : 'Upload Work'}
+                                </button>
+                              )}
+                              {taskHasSubmission && canUploadSubmission ? (
+                                <button
+                                  onClick={() => handleDownloadSubmission(task)}
+                                  disabled={isDownloadingThisTask}
+                                  className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {isDownloadingThisTask ? (
+                                    <Loader2 size={14} className="inline mr-1 animate-spin" />
+                                  ) : (
+                                    <Download size={14} className="inline mr-1" />
+                                  )}
+                                  {isDownloadingThisTask ? 'Downloading...' : 'Download Work'}
+                                </button>
+                              ) : null}
                               <select
                                 value={task.status}
                                 onChange={(event) => handleUpdateTaskStatus(task, event.target.value)}
@@ -1168,6 +1394,14 @@ export default function ProjectPage() {
                     placeholder="teammate@example.com"
                     className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"
                   />
+                  <select
+                    value={inviteRole}
+                    onChange={(event) => setInviteRole(event.target.value)}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"
+                  >
+                    <option value="Member">Member access</option>
+                    <option value="ProjectManager">Project admin access</option>
+                  </select>
                   <button
                     type="submit"
                     disabled={inviteLoading}
@@ -1194,6 +1428,20 @@ export default function ProjectPage() {
                     <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
                       {member.role || 'Member'}
                     </span>
+                    {isOwner &&
+                    member.user._id !== project.owner?._id &&
+                    member.role !== 'ProjectManager' &&
+                    !pendingRoleChangeUserIds.has(member.user._id) ? (
+                      <button
+                        onClick={() => handleRequestProjectAdminAccess(member)}
+                        disabled={roleRequestLoadingId === member.user._id}
+                        className="rounded-xl border border-violet-200 px-3 py-2 text-xs font-semibold text-violet-700 transition hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {roleRequestLoadingId === member.user._id
+                          ? 'Sending...'
+                          : 'Grant Admin Access'}
+                      </button>
+                    ) : null}
                     {isOwner && member.user._id !== project.owner?._id ? (
                       <button
                         onClick={() => handleRemoveMember(member)}
@@ -1230,6 +1478,45 @@ export default function ProjectPage() {
                           {invite.role || 'Member'}
                         </span>
                         <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">
+                          Pending
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {isOwner && pendingRoleChanges.length > 0 ? (
+                <div className="space-y-3 pt-2">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                    <CalendarClock size={16} className="text-violet-600" />
+                    Pending admin access requests
+                  </div>
+                  {pendingRoleChanges.map((roleRequest) => (
+                    <div
+                      key={roleRequest._id || roleRequest.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-violet-50/60 p-4"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-900">
+                          {getUserName(roleRequest.user)}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          Requested by {getUserName(roleRequest.requestedBy)}
+                        </p>
+                        <p className="mt-1 text-xs text-violet-700">
+                          Requested {formatDateLabel(roleRequest.createdAt, {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: 'numeric',
+                            minute: '2-digit',
+                          })}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600">
+                          {roleRequest.currentRole || 'Member'} to {roleRequest.requestedRole || 'ProjectManager'}
+                        </span>
+                        <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-semibold text-violet-700">
                           Pending
                         </span>
                       </div>
@@ -1614,6 +1901,87 @@ export default function ProjectPage() {
             </div>
           </div>
         </SectionCard>
+      )}
+
+      {submissionTask && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-6">
+          <div className="w-full max-w-2xl rounded-3xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-violet-600">
+                  Task work upload
+                </p>
+                <h2 className="mt-1 text-2xl font-semibold text-slate-900">
+                  Upload work for {submissionTask.title}
+                </h2>
+                <p className="mt-2 text-sm text-slate-500">
+                  Accepted formats: {formatAllowedSubmissionFormats(submissionTask.allowedSubmissionFormats)}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  if (uploadingSubmissionId) return;
+                  setSubmissionTask(null);
+                  setSubmissionFile(null);
+                  setSubmissionNote('');
+                }}
+                className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+                aria-label="Close submission form"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleUploadSubmission} className="space-y-5 px-6 py-6">
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-slate-700">
+                  Select file
+                </label>
+                <input
+                  type="file"
+                  onChange={(event) => setSubmissionFile(event.target.files?.[0] || null)}
+                  className="block w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 file:mr-4 file:rounded-xl file:border-0 file:bg-violet-50 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-violet-700 hover:file:bg-violet-100"
+                />
+                <p className="mt-2 text-xs text-slate-500">Maximum upload size: 5 MB.</p>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-slate-700">
+                  Submission note
+                </label>
+                <textarea
+                  value={submissionNote}
+                  onChange={(event) => setSubmissionNote(event.target.value)}
+                  className="min-h-[120px] w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"
+                  placeholder="Add context for the uploaded work"
+                />
+              </div>
+
+              <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (uploadingSubmissionId) return;
+                    setSubmissionTask(null);
+                    setSubmissionFile(null);
+                    setSubmissionNote('');
+                  }}
+                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={Boolean(uploadingSubmissionId)}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {uploadingSubmissionId && <Loader2 size={16} className="animate-spin" />}
+                  Upload Work
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </WorkspaceLayout>
   );

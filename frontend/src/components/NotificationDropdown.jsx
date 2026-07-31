@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Check, Loader2 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -20,7 +20,7 @@ const NotificationDropdown = ({
   const { user } = useAuth();
   const userTimeZone = getUserTimezone(user);
   const [displayNotifications, setDisplayNotifications] = useState(notifications);
-  const [inviteActionId, setInviteActionId] = useState('');
+  const [actionNotificationId, setActionNotificationId] = useState('');
 
   useEffect(() => {
     setDisplayNotifications(notifications);
@@ -34,12 +34,25 @@ const NotificationDropdown = ({
     note?.metadata?.invitationId &&
     note?.metadata?.invitationStatus === 'pending';
 
-  const hasPendingProjectInvites = useMemo(
-    () => displayNotifications.some((note) => isPendingProjectInvite(note)),
-    [displayNotifications]
+  const isPendingRoleRequest = (note) =>
+    ['ProjectRoleRequest', 'project_role_request'].includes(note?.type) &&
+    note?.metadata?.projectId &&
+    note?.metadata?.roleRequestId &&
+    note?.metadata?.roleRequestStatus === 'pending';
+
+  const isProtectedPendingNotification = (note) =>
+    isPendingProjectInvite(note) || isPendingRoleRequest(note);
+
+  const hasProtectedPendingNotifications = displayNotifications.some((note) =>
+    isProtectedPendingNotification(note)
   );
 
-  const updateInviteNotificationState = (notificationId, nextStatus, nextMessage) => {
+  const updateActionNotificationState = (
+    notificationId,
+    nextStatus,
+    nextMessage,
+    { acceptedTitle, declinedTitle, metadataKey }
+  ) => {
     setDisplayNotifications((current) =>
       current.map((note) => {
         if (getNotificationId(note) !== notificationId) {
@@ -49,41 +62,64 @@ const NotificationDropdown = ({
         return {
           ...note,
           read: true,
-          title: nextStatus === 'accepted' ? 'Invitation accepted' : 'Invitation declined',
+          title: nextStatus === 'accepted' ? acceptedTitle : declinedTitle,
           message: nextMessage || note.message,
           metadata: {
             ...note.metadata,
-            invitationStatus: nextStatus,
+            [metadataKey]: nextStatus,
           },
         };
       })
     );
   };
 
-  const handleInviteResponse = async (note, responseType, event) => {
+  const getPendingRequestConfig = (note) => {
+    if (isPendingProjectInvite(note)) {
+      return {
+        acceptEndpoint: `/projects/${note.metadata.projectId}/invitations/${note.metadata.invitationId}/accept`,
+        declineEndpoint: `/projects/${note.metadata.projectId}/invitations/${note.metadata.invitationId}/decline`,
+        acceptedTitle: 'Invitation accepted',
+        declinedTitle: 'Invitation declined',
+        metadataKey: 'invitationStatus',
+        missingMessage: 'Invitation details are missing.',
+      };
+    }
+
+    if (isPendingRoleRequest(note)) {
+      return {
+        acceptEndpoint: `/projects/${note.metadata.projectId}/role-requests/${note.metadata.roleRequestId}/accept`,
+        declineEndpoint: `/projects/${note.metadata.projectId}/role-requests/${note.metadata.roleRequestId}/decline`,
+        acceptedTitle: 'Access request accepted',
+        declinedTitle: 'Access request declined',
+        metadataKey: 'roleRequestStatus',
+        missingMessage: 'Access request details are missing.',
+      };
+    }
+
+    return null;
+  };
+
+  const handlePendingRequestResponse = async (note, responseType, event) => {
     event.stopPropagation();
 
     const notificationId = getNotificationId(note);
-    const projectId = note?.metadata?.projectId;
-    const invitationId = note?.metadata?.invitationId;
+    const config = getPendingRequestConfig(note);
 
-    if (!notificationId || !projectId || !invitationId) {
-      toast.error('Invitation details are missing.');
+    if (!notificationId || !config) {
+      toast.error(config?.missingMessage || 'Request details are missing.');
       return;
     }
 
-    const endpoint =
-      responseType === 'accept'
-        ? `/projects/${projectId}/invitations/${invitationId}/accept`
-        : `/projects/${projectId}/invitations/${invitationId}/decline`;
+    const endpoint = responseType === 'accept' ? config.acceptEndpoint : config.declineEndpoint;
 
     try {
-      setInviteActionId(notificationId);
+      setActionNotificationId(notificationId);
       const { data } = await api.post(endpoint);
-      updateInviteNotificationState(
+      updateActionNotificationState(
         notificationId,
         responseType === 'accept' ? 'accepted' : 'declined',
-        data?.message
+        data?.message,
+        config
       );
 
       if (!note?.read) {
@@ -100,29 +136,31 @@ const NotificationDropdown = ({
       toast.error(
         error?.response?.data?.message ||
           error?.response?.data?.error ||
-          `Failed to ${responseType} invitation.`
+          `Failed to ${responseType} request.`
       );
     } finally {
-      setInviteActionId('');
+      setActionNotificationId('');
     }
   };
 
   const handleClearAllClick = async () => {
     const removableNotifications = displayNotifications.filter(
-      (note) => !isPendingProjectInvite(note)
+      (note) => !isProtectedPendingNotification(note)
     );
 
     if (removableNotifications.length === 0) {
       return;
     }
 
-    if (!hasPendingProjectInvites) {
+    if (!hasProtectedPendingNotifications) {
       onClearAll?.();
       return;
     }
 
     await Promise.allSettled(removableNotifications.map((note) => onDelete?.(note)));
-    setDisplayNotifications((current) => current.filter((note) => isPendingProjectInvite(note)));
+    setDisplayNotifications((current) =>
+      current.filter((note) => isProtectedPendingNotification(note))
+    );
   };
 
   return (
@@ -149,7 +187,9 @@ const NotificationDropdown = ({
             const message = note?.message || note?.text || title;
             const timeValue = note?.createdAt || note?.timestamp || null;
             const pendingInvite = isPendingProjectInvite(note);
-            const actionBusy = inviteActionId === getNotificationId(note);
+            const pendingRoleRequest = isPendingRoleRequest(note);
+            const hasPendingAction = pendingInvite || pendingRoleRequest;
+            const actionBusy = actionNotificationId === getNotificationId(note);
             const time = timeValue
               ? formatDateTimeInTimeZone(timeValue, userTimeZone, undefined, '')
               : note?.time || '';
@@ -170,12 +210,12 @@ const NotificationDropdown = ({
                     {message && message !== title ? (
                       <p className="mt-1 text-xs leading-5 text-slate-500">{message}</p>
                     ) : null}
-                    {pendingInvite ? (
+                    {hasPendingAction ? (
                       <div className="mt-3 flex flex-wrap gap-2">
                         <button
                           className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                           disabled={actionBusy}
-                          onClick={(event) => handleInviteResponse(note, 'accept', event)}
+                          onClick={(event) => handlePendingRequestResponse(note, 'accept', event)}
                         >
                           {actionBusy ? (
                             <Loader2 size={14} className="animate-spin" />
@@ -187,7 +227,7 @@ const NotificationDropdown = ({
                         <button
                           className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                           disabled={actionBusy}
-                          onClick={(event) => handleInviteResponse(note, 'decline', event)}
+                          onClick={(event) => handlePendingRequestResponse(note, 'decline', event)}
                         >
                           Decline
                         </button>
@@ -197,7 +237,7 @@ const NotificationDropdown = ({
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     {!isRead && <span className="w-2 h-2 bg-violet-500 rounded-full mt-1 transition-all duration-200" />}
-                    {!pendingInvite ? (
+                    {!hasPendingAction ? (
                       <button
                         className="text-slate-400 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-all"
                         onClick={(event) => {

@@ -14,11 +14,13 @@ import {
   LogOut,
   Menu,
   MessageSquare,
+  Download,
   Pencil,
   Plus,
   Search,
   Settings,
   Trash2,
+  Upload,
   UserRound,
   X,
 } from 'lucide-react';
@@ -35,6 +37,12 @@ import {
   getUserTimezone,
 } from '../utils/userPreferences';
 import { getInitialSidebarOpen } from '../utils/sidebarState';
+import {
+  formatAllowedSubmissionFormats,
+  hasTaskSubmission,
+  readFileAsBase64,
+  triggerBlobDownload,
+} from '../utils/taskSubmission';
 
 const TASK_STATUSES = ['To Do', 'In Progress', 'In Review', 'Done'];
 const TASK_PRIORITIES = ['Low', 'Medium', 'High'];
@@ -269,6 +277,11 @@ const normalizeTask = (task) => ({
   priority: task?.priority || 'Medium',
   status: task?.status || 'To Do',
   dueDate: task?.dueDate || null,
+  submissionRequired: !!task?.submissionRequired,
+  allowedSubmissionFormats: Array.isArray(task?.allowedSubmissionFormats)
+    ? task.allowedSubmissionFormats
+    : [],
+  submission: task?.submission || null,
   createdAt: task?.createdAt || null,
   updatedAt: task?.updatedAt || null,
 });
@@ -325,6 +338,12 @@ const canUpdateTaskStatus = (task, project, user) => {
   return getEntityId(task.assignedTo) === getEntityId(user);
 };
 
+const canUploadTaskSubmission = (task, project, user) => {
+  if (!task || !user) return false;
+  if (isProjectManager(project, user)) return true;
+  return getEntityId(task.assignedTo) === getEntityId(user);
+};
+
 const getErrorMessage = (error, fallback) =>
   error?.response?.data?.error ||
   error?.response?.data?.message ||
@@ -352,9 +371,14 @@ export default function TasksPage() {
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [taskBeingEdited, setTaskBeingEdited] = useState(null);
   const [taskPendingDelete, setTaskPendingDelete] = useState(null);
+  const [submissionTask, setSubmissionTask] = useState(null);
+  const [submissionFile, setSubmissionFile] = useState(null);
+  const [submissionNote, setSubmissionNote] = useState('');
   const [savingTask, setSavingTask] = useState(false);
   const [deletingTaskId, setDeletingTaskId] = useState('');
   const [updatingStatusId, setUpdatingStatusId] = useState('');
+  const [uploadingSubmissionId, setUploadingSubmissionId] = useState('');
+  const [downloadingSubmissionId, setDownloadingSubmissionId] = useState('');
   const [formError, setFormError] = useState('');
   const [taskForm, setTaskForm] = useState({
     title: '',
@@ -364,6 +388,8 @@ export default function TasksPage() {
     priority: 'Medium',
     status: 'To Do',
     dueDate: '',
+    submissionRequired: false,
+    allowedSubmissionFormats: '',
   });
 
   const handleLogout = () => {
@@ -439,6 +465,11 @@ export default function TasksPage() {
         setShowNotifications(false);
         if (!savingTask) setShowTaskModal(false);
         if (!deletingTaskId) setTaskPendingDelete(null);
+        if (!uploadingSubmissionId) {
+          setSubmissionTask(null);
+          setSubmissionFile(null);
+          setSubmissionNote('');
+        }
       }
     };
 
@@ -449,7 +480,7 @@ export default function TasksPage() {
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [deletingTaskId, savingTask]);
+  }, [deletingTaskId, savingTask, uploadingSubmissionId]);
 
   const projectMap = useMemo(
     () => new Map(projects.map((project) => [getEntityId(project), project])),
@@ -594,6 +625,8 @@ export default function TasksPage() {
       priority: 'Medium',
       status: 'To Do',
       dueDate: '',
+      submissionRequired: false,
+      allowedSubmissionFormats: '',
     });
     setFormError('');
     setTaskBeingEdited(null);
@@ -625,6 +658,10 @@ export default function TasksPage() {
       priority: task.priority || 'Medium',
       status: task.status || 'To Do',
       dueDate: formatDateInputValue(task.dueDate),
+      submissionRequired: !!task.submissionRequired,
+      allowedSubmissionFormats: Array.isArray(task.allowedSubmissionFormats)
+        ? task.allowedSubmissionFormats.join(', ')
+        : '',
     });
     setFormError('');
     setShowTaskModal(true);
@@ -633,7 +670,10 @@ export default function TasksPage() {
   const handleTaskFormChange = (field, value) => {
     setTaskForm((current) => ({
       ...current,
-      [field]: value,
+      [field]: field === 'submissionRequired' ? Boolean(value) : value,
+      ...(field === 'submissionRequired' && !value
+        ? { allowedSubmissionFormats: '' }
+        : {}),
     }));
   };
 
@@ -659,6 +699,8 @@ export default function TasksPage() {
       priority: taskForm.priority,
       status: taskForm.status,
       dueDate: taskForm.dueDate || null,
+      submissionRequired: taskForm.submissionRequired,
+      allowedSubmissionFormats: taskForm.allowedSubmissionFormats,
     };
 
     try {
@@ -701,12 +743,76 @@ export default function TasksPage() {
     }
   };
 
+  const openSubmissionModal = (task) => {
+    setSubmissionTask(task);
+    setSubmissionFile(null);
+    setSubmissionNote(task?.submission?.note || '');
+  };
+
+  const handleUploadSubmission = async (event) => {
+    event.preventDefault();
+
+    if (!submissionTask?.id) return;
+    if (!submissionFile) {
+      toast.error('Choose a file to upload.');
+      return;
+    }
+
+    try {
+      setUploadingSubmissionId(submissionTask.id);
+      const contentBase64 = await readFileAsBase64(submissionFile);
+      const response = await taskService.uploadTaskSubmission(submissionTask.id, {
+        fileName: submissionFile.name,
+        mimeType: submissionFile.type,
+        contentBase64,
+        note: submissionNote.trim(),
+      });
+
+      const updatedTask = normalizeTask(response?.data?.task || {});
+      if (updatedTask.id) {
+        setTasks((previous) =>
+          sortTasks(previous.map((item) => (item.id === updatedTask.id ? updatedTask : item)))
+        );
+      } else {
+        await loadTaskPageData({ showSpinner: false });
+      }
+
+      setSubmissionTask(null);
+      setSubmissionFile(null);
+      setSubmissionNote('');
+      toast.success(response?.data?.message || 'Task work uploaded successfully');
+    } catch (requestError) {
+      toast.error(getErrorMessage(requestError, 'Unable to upload task work.'));
+    } finally {
+      setUploadingSubmissionId('');
+    }
+  };
+
+  const handleDownloadSubmission = async (task) => {
+    if (!task?.id || !task?.submission?.fileName) return;
+
+    try {
+      setDownloadingSubmissionId(task.id);
+      const response = await taskService.downloadTaskSubmission(task.id);
+      triggerBlobDownload(response.data, task.submission.fileName);
+    } catch (requestError) {
+      toast.error(getErrorMessage(requestError, 'Unable to download task work.'));
+    } finally {
+      setDownloadingSubmissionId('');
+    }
+  };
+
   const handleStatusChange = async (task, nextStatus) => {
     if (!task?.id || task.status === nextStatus) return;
 
     const relatedProject = projectMap.get(task.projectId);
     if (!canUpdateTaskStatus(task, relatedProject, user)) {
       toast.error('You are only allowed to update tasks assigned to you.');
+      return;
+    }
+
+    if (nextStatus === 'Done' && task.submissionRequired && !hasTaskSubmission(task)) {
+      toast.error('Upload the required task work before marking this task as done.');
       return;
     }
 
@@ -1015,8 +1121,12 @@ export default function TasksPage() {
                     const relatedProject = projectMap.get(task.projectId);
                     const canManageThisTask = isProjectManager(relatedProject, user);
                     const canChangeThisTaskStatus = canUpdateTaskStatus(task, relatedProject, user);
+                    const canUploadThisTaskSubmission = canUploadTaskSubmission(task, relatedProject, user);
+                    const taskHasSubmission = hasTaskSubmission(task);
                     const isStatusUpdating = updatingStatusId === task.id;
                     const isDeletingThisTask = deletingTaskId === task.id;
+                    const isDownloadingSubmission = downloadingSubmissionId === task.id;
+                    const isUploadingThisTask = uploadingSubmissionId === task.id;
 
                     return (
                       <article
@@ -1044,9 +1154,79 @@ export default function TasksPage() {
                             ) : (
                               <p className="mt-3 text-sm italic text-slate-400">No description provided.</p>
                             )}
+
+                            {task.submissionRequired ? (
+                              <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Badge tone={taskHasSubmission ? 'success' : 'medium'}>
+                                    {taskHasSubmission ? 'Work uploaded' : 'Submission required'}
+                                  </Badge>
+                                  <span className="text-xs font-medium text-amber-700">
+                                    Accepted formats: {formatAllowedSubmissionFormats(task.allowedSubmissionFormats)}
+                                  </span>
+                                </div>
+
+                                {taskHasSubmission ? (
+                                  <div className="mt-3 flex flex-col gap-2 text-sm text-slate-600">
+                                    <p>
+                                      Uploaded file: <span className="font-medium text-slate-900">{task.submission.fileName}</span>
+                                    </p>
+                                    <p>
+                                      Submitted by {getDisplayName(task.submission.uploadedBy)} on{' '}
+                                      <span className="font-medium text-slate-900">
+                                        {formatDateTimeLabel(task.submission.uploadedAt, userTimeZone)}
+                                      </span>
+                                    </p>
+                                    {task.submission.note ? (
+                                      <p className="text-slate-500">{task.submission.note}</p>
+                                    ) : null}
+                                  </div>
+                                ) : (
+                                  <p className="mt-3 text-sm text-amber-700">
+                                    This task cannot be marked done until the required work file is uploaded.
+                                  </p>
+                                )}
+                              </div>
+                            ) : null}
                           </div>
 
                           <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                            {(taskHasSubmission || canUploadThisTaskSubmission) && (
+                              <button
+                                onClick={() =>
+                                  taskHasSubmission && !canUploadThisTaskSubmission
+                                    ? handleDownloadSubmission(task)
+                                    : openSubmissionModal(task)
+                                }
+                                disabled={isDownloadingSubmission || isUploadingThisTask}
+                                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition hover:border-violet-200 hover:text-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {taskHasSubmission && !canUploadThisTaskSubmission ? (
+                                  <Download size={15} />
+                                ) : (
+                                  <Upload size={15} />
+                                )}
+                                {taskHasSubmission && !canUploadThisTaskSubmission
+                                  ? 'Download Work'
+                                  : taskHasSubmission
+                                    ? 'Replace Work'
+                                    : 'Upload Work'}
+                              </button>
+                            )}
+                            {taskHasSubmission && canUploadThisTaskSubmission && (
+                              <button
+                                onClick={() => handleDownloadSubmission(task)}
+                                disabled={isDownloadingSubmission}
+                                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition hover:border-violet-200 hover:text-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {isDownloadingSubmission ? (
+                                  <Loader2 size={15} className="animate-spin" />
+                                ) : (
+                                  <Download size={15} />
+                                )}
+                                Download Work
+                              </button>
+                            )}
                             <button
                               onClick={() => openEditTaskModal(task)}
                               disabled={!canManageThisTask}
@@ -1103,6 +1283,7 @@ export default function TasksPage() {
                             </p>
                             <p className="mt-1 text-sm text-slate-500">
                               Owners, admins, managers, and assigned members can change status.
+                              {task.submissionRequired ? ' Required work must be uploaded before Done.' : ''}
                             </p>
                           </div>
 
@@ -1277,6 +1458,37 @@ export default function TasksPage() {
                     className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"
                   />
                 </div>
+
+                <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                  <label className="flex items-center gap-3 text-sm font-semibold text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={taskForm.submissionRequired}
+                      onChange={(event) => handleTaskFormChange('submissionRequired', event.target.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-200"
+                    />
+                    Require uploaded task work before Done
+                  </label>
+
+                  {taskForm.submissionRequired ? (
+                    <div className="mt-4">
+                      <label className="mb-2 block text-sm font-semibold text-slate-700">
+                        Accepted file formats
+                      </label>
+                      <input
+                        value={taskForm.allowedSubmissionFormats}
+                        onChange={(event) =>
+                          handleTaskFormChange('allowedSubmissionFormats', event.target.value)
+                        }
+                        className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"
+                        placeholder="pdf, docx, zip, fig"
+                      />
+                      <p className="mt-2 text-xs text-slate-500">
+                        Leave blank to accept any file format.
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
               </div>
 
               <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
@@ -1298,6 +1510,89 @@ export default function TasksPage() {
                 >
                   {savingTask && <Loader2 size={16} className="animate-spin" />}
                   {taskBeingEdited ? 'Save Changes' : 'Create Task'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {submissionTask && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-6">
+          <div className="w-full max-w-2xl rounded-3xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-violet-600">
+                  Task work upload
+                </p>
+                <h2 className="mt-1 text-2xl font-semibold text-slate-900">
+                  Upload work for {submissionTask.title}
+                </h2>
+                <p className="mt-2 text-sm text-slate-500">
+                  Accepted formats: {formatAllowedSubmissionFormats(submissionTask.allowedSubmissionFormats)}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  if (uploadingSubmissionId) return;
+                  setSubmissionTask(null);
+                  setSubmissionFile(null);
+                  setSubmissionNote('');
+                }}
+                className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+                aria-label="Close submission form"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleUploadSubmission} className="space-y-5 px-6 py-6">
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-slate-700">
+                  Select file
+                </label>
+                <input
+                  type="file"
+                  onChange={(event) => setSubmissionFile(event.target.files?.[0] || null)}
+                  className="block w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 file:mr-4 file:rounded-xl file:border-0 file:bg-violet-50 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-violet-700 hover:file:bg-violet-100"
+                />
+                <p className="mt-2 text-xs text-slate-500">
+                  Maximum upload size: 5 MB.
+                </p>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-slate-700">
+                  Submission note
+                </label>
+                <textarea
+                  value={submissionNote}
+                  onChange={(event) => setSubmissionNote(event.target.value)}
+                  className="min-h-[120px] w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"
+                  placeholder="Add context for the uploaded work"
+                />
+              </div>
+
+              <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (uploadingSubmissionId) return;
+                    setSubmissionTask(null);
+                    setSubmissionFile(null);
+                    setSubmissionNote('');
+                  }}
+                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={Boolean(uploadingSubmissionId)}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {uploadingSubmissionId && <Loader2 size={16} className="animate-spin" />}
+                  Upload Work
                 </button>
               </div>
             </form>

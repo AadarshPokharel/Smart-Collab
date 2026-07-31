@@ -7,6 +7,15 @@ const isPendingProjectInvite = (notification) =>
   notification?.metadata?.invitationId &&
   notification?.metadata?.projectId;
 
+const isPendingRoleRequest = (notification) =>
+  ['ProjectRoleRequest', 'project_role_request'].includes(notification?.type) &&
+  notification?.metadata?.roleRequestStatus === 'pending' &&
+  notification?.metadata?.roleRequestId &&
+  notification?.metadata?.projectId;
+
+const isProtectedPendingNotification = (notification) =>
+  isPendingProjectInvite(notification) || isPendingRoleRequest(notification);
+
 const formatNotification = (notification) => ({
   id: notification._id,
   type: notification.type,
@@ -130,10 +139,10 @@ exports.deleteNotification = async (req, res) => {
       });
     }
 
-    if (isPendingProjectInvite(notification)) {
+    if (isProtectedPendingNotification(notification)) {
       return res.status(400).json({
         success: false,
-        error: 'Respond to the project invitation before removing this notification',
+        error: 'Respond to this pending request before removing the notification',
       });
     }
 
@@ -163,6 +172,14 @@ exports.clearNotifications = async (req, res) => {
         {
           type: 'project_invite',
           'metadata.invitationStatus': 'pending',
+        },
+        {
+          type: 'ProjectRoleRequest',
+          'metadata.roleRequestStatus': 'pending',
+        },
+        {
+          type: 'project_role_request',
+          'metadata.roleRequestStatus': 'pending',
         },
       ],
     });

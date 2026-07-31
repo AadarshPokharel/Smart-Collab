@@ -71,6 +71,39 @@ const projectSchema = new mongoose.Schema(
         },
       },
     ],
+    pendingRoleChanges: [
+      {
+        user: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          required: true,
+        },
+        currentRole: {
+          type: String,
+          enum: ['Owner', 'ProjectManager', 'Member'],
+          required: true,
+        },
+        requestedRole: {
+          type: String,
+          enum: ['ProjectManager'],
+          required: true,
+        },
+        requestedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          required: true,
+        },
+        status: {
+          type: String,
+          enum: ['pending'],
+          default: 'pending',
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
     milestones: [
       {
         title: {

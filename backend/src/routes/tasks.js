@@ -8,6 +8,8 @@ const {
   getTaskById,
   updateTask,
   updateTaskStatus,
+  uploadTaskSubmission,
+  downloadTaskSubmission,
   deleteTask,
 } = require('../controllers/taskController');
 const { authMiddleware } = require('../middleware/auth');
@@ -27,6 +29,8 @@ router.get('/', (req, res, next) => {
 
   return getTasks(req, res);
 });
+router.post('/:id/submission', uploadTaskSubmission);
+router.get('/:id/submission/download', downloadTaskSubmission);
 router.get('/:id', getTaskById);
 router.put('/:id', updateTask);
 router.patch('/:id/status', updateTaskStatus);

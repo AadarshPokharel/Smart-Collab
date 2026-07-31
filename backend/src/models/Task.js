@@ -48,6 +48,56 @@ const taskSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    submissionRequired: {
+      type: Boolean,
+      default: false,
+    },
+    allowedSubmissionFormats: [
+      {
+        type: String,
+        trim: true,
+        lowercase: true,
+      },
+    ],
+    submission: {
+      fileName: {
+        type: String,
+        default: '',
+        trim: true,
+      },
+      mimeType: {
+        type: String,
+        default: '',
+        trim: true,
+      },
+      size: {
+        type: Number,
+        default: 0,
+      },
+      extension: {
+        type: String,
+        default: '',
+        trim: true,
+        lowercase: true,
+      },
+      note: {
+        type: String,
+        default: '',
+      },
+      data: {
+        type: String,
+        default: '',
+      },
+      uploadedAt: {
+        type: Date,
+        default: null,
+      },
+      uploadedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+      },
+    },
   },
   { timestamps: true }
 );

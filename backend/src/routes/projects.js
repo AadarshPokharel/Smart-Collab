@@ -9,6 +9,9 @@ const {
   inviteMember,
   acceptInvite,
   declineInvite,
+  requestRoleChange,
+  acceptRoleChange,
+  declineRoleChange,
   removeMember,
   addMeeting,
   updateMeeting,
@@ -54,6 +57,15 @@ router.post('/:id/invitations/:invitationId/accept', acceptInvite);
 
 // POST   /api/projects/:id/invitations/:invitationId/decline - Decline a project invitation
 router.post('/:id/invitations/:invitationId/decline', declineInvite);
+
+// POST   /api/projects/:id/role-requests - Request project admin access for a member
+router.post('/:id/role-requests', requestRoleChange);
+
+// POST   /api/projects/:id/role-requests/:requestId/accept - Accept project admin access
+router.post('/:id/role-requests/:requestId/accept', acceptRoleChange);
+
+// POST   /api/projects/:id/role-requests/:requestId/decline - Decline project admin access
+router.post('/:id/role-requests/:requestId/decline', declineRoleChange);
 
 // DELETE /api/projects/:id/members/:memberId - Remove member (owner only)
 router.delete('/:id/members/:memberId', removeMember);

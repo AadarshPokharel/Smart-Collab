@@ -57,6 +57,9 @@ export const projectService = {
   inviteMember: (projectId, memberData) =>
     api.post(`/projects/${projectId}/invite`, memberData),
 
+  requestRoleChange: (projectId, memberId, role = 'ProjectManager') =>
+    api.post(`/projects/${projectId}/role-requests`, { memberId, role }),
+
   addMember: (projectId, userId) =>
     api.post(`/projects/${projectId}/members`, { userId }),
 
@@ -124,6 +127,12 @@ export const taskService = {
 
   updateTaskStatus: (id, status) =>
     api.patch(`/tasks/${id}/status`, { status }),
+
+  uploadTaskSubmission: (id, data) =>
+    api.post(`/tasks/${id}/submission`, data),
+
+  downloadTaskSubmission: (id) =>
+    api.get(`/tasks/${id}/submission/download`, { responseType: 'blob' }),
 
   deleteTask: (id) =>
     api.delete(`/tasks/${id}`),

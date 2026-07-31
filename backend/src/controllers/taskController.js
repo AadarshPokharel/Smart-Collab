@@ -7,6 +7,7 @@ const {
   recordActivitySafely,
 } = require('../services/activityService');
 
+const MAX_SUBMISSION_BYTES = 5 * 1024 * 1024;
 const TASK_STATUSES = ['To Do', 'In Progress', 'In Review', 'Done'];
 const TASK_PRIORITIES = ['Low', 'Medium', 'High'];
 
@@ -15,6 +16,20 @@ const toObjectIdString = (value) => {
   if (typeof value === 'string') return value;
   if (value._id) return value._id.toString();
   return value.toString();
+};
+
+const mapUserBrief = (user) => {
+  if (!user || typeof user !== 'object') return null;
+
+  return {
+    id: toObjectIdString(user),
+    _id: user._id || null,
+    firstName: user.firstName || '',
+    lastName: user.lastName || '',
+    email: user.email || '',
+    avatar: user.avatar || null,
+    displayName: getDisplayName(user),
+  };
 };
 
 const isGlobalAdmin = (user) => user?.role === 'admin';
@@ -37,13 +52,10 @@ const isProjectOwner = (project, userId) => {
   return toObjectIdString(project.owner) === toObjectIdString(userId);
 };
 
-const isProjectMember = (project, userId) => {
-  return isProjectOwner(project, userId) || !!getProjectMemberRecord(project, userId);
-};
+const isProjectMember = (project, userId) =>
+  isProjectOwner(project, userId) || !!getProjectMemberRecord(project, userId);
 
-const canViewProject = (project, user) => {
-  return isGlobalAdmin(user) || isProjectMember(project, user?._id);
-};
+const canViewProject = (project, user) => isGlobalAdmin(user) || isProjectMember(project, user?._id);
 
 const canManageProjectTasks = (project, user) => {
   if (isGlobalAdmin(user) || isProjectOwner(project, user?._id)) {
@@ -55,6 +67,14 @@ const canManageProjectTasks = (project, user) => {
 };
 
 const canUpdateTaskStatus = (task, project, user) => {
+  if (canManageProjectTasks(project, user)) {
+    return true;
+  }
+
+  return toObjectIdString(task?.assignedTo) === toObjectIdString(user?._id);
+};
+
+const canUploadTaskSubmission = (task, project, user) => {
   if (canManageProjectTasks(project, user)) {
     return true;
   }
@@ -110,10 +130,46 @@ const validateAssigneeInProject = (project, assignedTo) => {
   return 'Assigned user must belong to the selected project';
 };
 
+const normalizeAllowedSubmissionFormats = (value) => {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : [];
+
+  return Array.from(
+    new Set(
+      source
+        .map((entry) => String(entry || '').trim().toLowerCase().replace(/^\./, ''))
+        .filter(Boolean)
+    )
+  );
+};
+
+const extractFileExtension = (fileName = '') => {
+  const normalized = String(fileName).trim();
+  if (!normalized.includes('.')) return '';
+  return normalized.split('.').pop().trim().toLowerCase();
+};
+
+const sanitizeBase64Payload = (value = '') =>
+  String(value || '')
+    .replace(/^data:.*;base64,/, '')
+    .replace(/\s+/g, '');
+
+const getDecodedByteSize = (base64Value = '') => {
+  try {
+    return Buffer.from(base64Value, 'base64').byteLength;
+  } catch {
+    return NaN;
+  }
+};
+
 const populateTaskRelations = async (task) => {
   await task.populate('project', 'title');
   await task.populate('assignedTo', 'firstName lastName email avatar');
   await task.populate('assignedBy', 'firstName lastName email avatar');
+  await task.populate('submission.uploadedBy', 'firstName lastName email avatar');
   return task;
 };
 
@@ -124,6 +180,48 @@ const toIsoOrNull = (value) => {
 };
 
 const getProjectTitle = (project) => project?.title || 'Untitled project';
+
+const serializeSubmission = (submission) => {
+  if (!submission?.fileName || !submission?.uploadedAt) {
+    return null;
+  }
+
+  return {
+    fileName: submission.fileName || '',
+    mimeType: submission.mimeType || '',
+    size: submission.size || 0,
+    extension: submission.extension || '',
+    note: submission.note || '',
+    uploadedAt: submission.uploadedAt || null,
+    uploadedBy: mapUserBrief(submission.uploadedBy),
+  };
+};
+
+const serializeTask = (task) => ({
+  id: toObjectIdString(task?._id),
+  _id: task?._id || null,
+  title: task?.title || '',
+  description: task?.description || '',
+  project: task?.project
+    ? {
+        id: toObjectIdString(task.project),
+        _id: task.project._id || null,
+        title: task.project.title || '',
+      }
+    : null,
+  assignedTo: mapUserBrief(task?.assignedTo),
+  assignedBy: mapUserBrief(task?.assignedBy),
+  priority: task?.priority || 'Medium',
+  status: task?.status || 'To Do',
+  dueDate: task?.dueDate || null,
+  dueTimezone: task?.dueTimezone || null,
+  completedAt: task?.completedAt || null,
+  submissionRequired: !!task?.submissionRequired,
+  allowedSubmissionFormats: normalizeAllowedSubmissionFormats(task?.allowedSubmissionFormats),
+  submission: serializeSubmission(task?.submission),
+  createdAt: task?.createdAt || null,
+  updatedAt: task?.updatedAt || null,
+});
 
 const snapshotTask = (task) => ({
   title: task?.title || '',
@@ -136,6 +234,11 @@ const snapshotTask = (task) => ({
   projectTitle: task?.project?.title || '',
   assignedToId: toObjectIdString(task?.assignedTo),
   assignedToName: task?.assignedTo ? getDisplayName(task.assignedTo) : 'Unassigned',
+  submissionRequired: !!task?.submissionRequired,
+  allowedSubmissionFormats: normalizeAllowedSubmissionFormats(task?.allowedSubmissionFormats),
+  hasSubmission: Boolean(task?.submission?.fileName && task?.submission?.uploadedAt),
+  submissionFileName: task?.submission?.fileName || '',
+  submissionUploadedAt: toIsoOrNull(task?.submission?.uploadedAt),
 });
 
 const buildTaskActivityMetadata = ({ task, projectTitle, actorName, extra = {} }) => ({
@@ -145,6 +248,18 @@ const buildTaskActivityMetadata = ({ task, projectTitle, actorName, extra = {} }
   taskTitle: task?.title || '',
   ...extra,
 });
+
+const validateTaskCompletionRequirements = (task, nextStatus) => {
+  if (nextStatus !== 'Done' || !task?.submissionRequired) {
+    return null;
+  }
+
+  if (!task?.submission?.fileName || !task?.submission?.data) {
+    return 'Upload the required task work before marking this task as done.';
+  }
+
+  return null;
+};
 
 const sendTaskNotification = async ({ recipientId, actorId, ...payload }) => {
   if (!recipientId) return;
@@ -192,6 +307,8 @@ exports.createTask = async (req, res) => {
       status = 'To Do',
       dueDate,
       dueTimezone,
+      submissionRequired = false,
+      allowedSubmissionFormats = [],
     } = req.body;
 
     const normalizedTitle = typeof title === 'string' ? title.trim() : '';
@@ -249,6 +366,14 @@ exports.createTask = async (req, res) => {
       });
     }
 
+    const nextSubmissionRequired = submissionRequired === true || submissionRequired === 'true';
+    if (status === 'Done' && nextSubmissionRequired) {
+      return res.status(400).json({
+        success: false,
+        error: 'A required submission must be uploaded before this task can be created as done.',
+      });
+    }
+
     const task = await Task.create({
       title: normalizedTitle,
       description: typeof description === 'string' ? description.trim() : '',
@@ -260,6 +385,8 @@ exports.createTask = async (req, res) => {
       dueDate: parsedDueDate.hasValue ? parsedDueDate.date : null,
       dueTimezone: typeof dueTimezone === 'string' && dueTimezone.trim() ? dueTimezone.trim() : null,
       completedAt: status === 'Done' ? new Date() : null,
+      submissionRequired: nextSubmissionRequired,
+      allowedSubmissionFormats: normalizeAllowedSubmissionFormats(allowedSubmissionFormats),
     });
 
     await populateTaskRelations(task);
@@ -302,7 +429,7 @@ exports.createTask = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      task,
+      task: serializeTask(task),
     });
   } catch (error) {
     return res.status(500).json({
@@ -324,11 +451,12 @@ exports.getTasks = async (req, res) => {
       .populate('project', 'title')
       .populate('assignedTo', 'firstName lastName email avatar')
       .populate('assignedBy', 'firstName lastName email avatar')
+      .populate('submission.uploadedBy', 'firstName lastName email avatar')
       .sort({ createdAt: -1 });
 
     return res.status(200).json({
       success: true,
-      tasks,
+      tasks: tasks.map(serializeTask),
     });
   } catch (error) {
     return res.status(500).json({
@@ -368,11 +496,12 @@ exports.getTasksByProject = async (req, res) => {
       .populate('project', 'title')
       .populate('assignedTo', 'firstName lastName email avatar')
       .populate('assignedBy', 'firstName lastName email avatar')
+      .populate('submission.uploadedBy', 'firstName lastName email avatar')
       .sort({ createdAt: -1 });
 
     return res.status(200).json({
       success: true,
-      tasks,
+      tasks: tasks.map(serializeTask),
     });
   } catch (error) {
     return res.status(500).json({
@@ -394,11 +523,12 @@ exports.getMyTasks = async (req, res) => {
       .populate('project', 'title')
       .populate('assignedTo', 'firstName lastName email avatar')
       .populate('assignedBy', 'firstName lastName email avatar')
+      .populate('submission.uploadedBy', 'firstName lastName email avatar')
       .sort({ dueDate: 1, createdAt: -1 });
 
     return res.status(200).json({
       success: true,
-      tasks,
+      tasks: tasks.map(serializeTask),
     });
   } catch (error) {
     return res.status(500).json({
@@ -437,7 +567,7 @@ exports.getTaskById = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      task,
+      task: serializeTask(task),
     });
   } catch (error) {
     return res.status(500).json({
@@ -481,9 +611,11 @@ exports.updateTask = async (req, res) => {
       status,
       dueDate,
       dueTimezone,
+      submissionRequired,
+      allowedSubmissionFormats,
     } = req.body;
 
-    await task.populate('assignedTo', 'firstName lastName email avatar');
+    await populateTaskRelations(task);
     const beforeSnapshot = {
       ...snapshotTask(task),
       projectTitle: getProjectTitle(currentProject),
@@ -574,8 +706,24 @@ exports.updateTask = async (req, res) => {
       task.assignedTo = assignedTo || null;
     }
 
+    if (submissionRequired !== undefined) {
+      task.submissionRequired = submissionRequired === true || submissionRequired === 'true';
+    }
+
+    if (allowedSubmissionFormats !== undefined) {
+      task.allowedSubmissionFormats = normalizeAllowedSubmissionFormats(allowedSubmissionFormats);
+    }
+
     if (projectId && projectId !== toObjectIdString(task.project)) {
       task.project = targetProject._id;
+    }
+
+    const completionError = validateTaskCompletionRequirements(task, task.status);
+    if (completionError) {
+      return res.status(400).json({
+        success: false,
+        error: completionError,
+      });
     }
 
     task.completedAt = task.status === 'Done' ? task.completedAt || new Date() : null;
@@ -750,6 +898,21 @@ exports.updateTask = async (req, res) => {
         new: afterSnapshot.projectTitle || targetProjectTitle,
       };
     }
+    if (beforeSnapshot.submissionRequired !== afterSnapshot.submissionRequired) {
+      genericChanges.submissionRequired = {
+        old: beforeSnapshot.submissionRequired,
+        new: afterSnapshot.submissionRequired,
+      };
+    }
+    if (
+      JSON.stringify(beforeSnapshot.allowedSubmissionFormats) !==
+      JSON.stringify(afterSnapshot.allowedSubmissionFormats)
+    ) {
+      genericChanges.allowedSubmissionFormats = {
+        old: beforeSnapshot.allowedSubmissionFormats,
+        new: afterSnapshot.allowedSubmissionFormats,
+      };
+    }
 
     if (Object.keys(genericChanges).length > 0) {
       activityEntries.push({
@@ -781,7 +944,7 @@ exports.updateTask = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      task,
+      task: serializeTask(task),
     });
   } catch (error) {
     return res.status(500).json({
@@ -830,6 +993,14 @@ exports.updateTaskStatus = async (req, res) => {
       return res.status(403).json({
         success: false,
         error: 'Not authorized to update this task status',
+      });
+    }
+
+    const completionError = validateTaskCompletionRequirements(task, status);
+    if (completionError) {
+      return res.status(400).json({
+        success: false,
+        error: completionError,
       });
     }
 
@@ -885,8 +1056,188 @@ exports.updateTaskStatus = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      task,
+      task: serializeTask(task),
     });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+};
+
+exports.uploadTaskSubmission = async (req, res) => {
+  try {
+    const { fileName, mimeType, contentBase64, note = '' } = req.body || {};
+    const { task, project } = await getTaskAndProject(req.params.id);
+
+    if (!task) {
+      return res.status(404).json({
+        success: false,
+        error: 'Task not found',
+      });
+    }
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    if (!canViewProject(project, req.user)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized to access this task',
+      });
+    }
+
+    if (!canUploadTaskSubmission(task, project, req.user)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Only the assignee or project admins can upload task work',
+      });
+    }
+
+    const normalizedFileName = typeof fileName === 'string' ? fileName.trim() : '';
+    const normalizedBase64 = sanitizeBase64Payload(contentBase64);
+
+    if (!normalizedFileName || !normalizedBase64) {
+      return res.status(400).json({
+        success: false,
+        error: 'A file upload is required',
+      });
+    }
+
+    const extension = extractFileExtension(normalizedFileName);
+    const allowedFormats = normalizeAllowedSubmissionFormats(task.allowedSubmissionFormats);
+
+    if (allowedFormats.length > 0 && (!extension || !allowedFormats.includes(extension))) {
+      return res.status(400).json({
+        success: false,
+        error: `Allowed formats: ${allowedFormats.join(', ')}`,
+      });
+    }
+
+    const decodedBytes = getDecodedByteSize(normalizedBase64);
+    if (!Number.isFinite(decodedBytes) || decodedBytes <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid file upload',
+      });
+    }
+
+    if (decodedBytes > MAX_SUBMISSION_BYTES) {
+      return res.status(400).json({
+        success: false,
+        error: 'Task uploads must be 5 MB or smaller',
+      });
+    }
+
+    await populateTaskRelations(task);
+    const previousSubmission = serializeSubmission(task.submission);
+
+    task.submission = {
+      fileName: normalizedFileName,
+      mimeType: typeof mimeType === 'string' ? mimeType.trim() : '',
+      size: decodedBytes,
+      extension,
+      note: typeof note === 'string' ? note.trim() : '',
+      data: normalizedBase64,
+      uploadedAt: new Date(),
+      uploadedBy: req.user._id,
+    };
+
+    await task.save();
+    await populateTaskRelations(task);
+
+    const actorName = getDisplayName(req.user);
+    await sendTaskNotification({
+      recipientId: task.assignedBy,
+      actorId: req.user._id,
+      type: 'Info',
+      title: 'Task work uploaded',
+      message: `${actorName} uploaded work for “${task.title}”.`,
+      entityType: 'Task',
+      entityId: task._id,
+      metadata: { projectId: toObjectIdString(task.project) },
+    });
+
+    await recordActivitySafely({
+      projectId: task.project?._id || task.project,
+      userId: req.user._id,
+      actionType: 'submitted',
+      entityType: 'task',
+      entityId: task._id,
+      title: task.title,
+      description: `${actorName} uploaded task work for “${task.title}”`,
+      oldValue: previousSubmission,
+      newValue: serializeSubmission(task.submission),
+      projectTitle: getProjectTitle(task.project),
+      userName: actorName,
+      entityTitle: task.title,
+      metadata: buildTaskActivityMetadata({
+        task,
+        projectTitle: getProjectTitle(task.project),
+        actorName,
+        extra: {
+          submissionFileName: task.submission.fileName,
+        },
+      }),
+    });
+
+    return res.status(200).json({
+      success: true,
+      task: serializeTask(task),
+      message: 'Task work uploaded successfully',
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+};
+
+exports.downloadTaskSubmission = async (req, res) => {
+  try {
+    const { task, project } = await getTaskAndProject(req.params.id);
+
+    if (!task) {
+      return res.status(404).json({
+        success: false,
+        error: 'Task not found',
+      });
+    }
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    if (!canViewProject(project, req.user)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized to access this task',
+      });
+    }
+
+    if (!task.submission?.fileName || !task.submission?.data) {
+      return res.status(404).json({
+        success: false,
+        error: 'No uploaded task work found',
+      });
+    }
+
+    const buffer = Buffer.from(task.submission.data, 'base64');
+    const safeFileName = task.submission.fileName.replace(/[^\w.\-() ]+/g, '_');
+
+    res.setHeader('Content-Type', task.submission.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Length', buffer.length);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeFileName}"`);
+    return res.status(200).send(buffer);
   } catch (error) {
     return res.status(500).json({
       success: false,
@@ -920,7 +1271,7 @@ exports.deleteTask = async (req, res) => {
       });
     }
 
-    await task.populate('assignedTo', 'firstName lastName email avatar');
+    await populateTaskRelations(task);
     const taskSnapshot = snapshotTask(task);
     const actorName = getDisplayName(req.user);
     await Task.findByIdAndDelete(req.params.id);
