@@ -67,12 +67,26 @@ const canManageProjectTasks = (project, user) => {
   return ['Owner', 'ProjectManager'].includes(member?.role);
 };
 
+const isTaskGiver = (task, user) =>
+  toObjectIdString(task?.assignedBy) === toObjectIdString(user?._id);
+
+const isTaskAssignee = (task, user) =>
+  toObjectIdString(task?.assignedTo) === toObjectIdString(user?._id);
+
+const canViewTask = (task, project, user) => {
+  if (canManageProjectTasks(project, user)) {
+    return true;
+  }
+
+  return isTaskAssignee(task, user) || isTaskGiver(task, user);
+};
+
 const canUpdateTaskStatus = (task, project, user) => {
   if (canManageProjectTasks(project, user)) {
     return true;
   }
 
-  return toObjectIdString(task?.assignedTo) === toObjectIdString(user?._id);
+  return isTaskAssignee(task, user);
 };
 
 const canUploadTaskSubmission = (task, project, user) => {
@@ -80,7 +94,7 @@ const canUploadTaskSubmission = (task, project, user) => {
     return true;
   }
 
-  return toObjectIdString(task?.assignedTo) === toObjectIdString(user?._id);
+  return isTaskAssignee(task, user);
 };
 
 const parseDueDate = (value) => {
@@ -253,6 +267,32 @@ const populateTaskRelations = async (task) => {
   return task;
 };
 
+const getProjectAccessBuckets = async (user) => {
+  const projects = await Project.find(
+    isGlobalAdmin(user)
+      ? {}
+      : {
+          $or: [{ owner: user._id }, { 'members.user': user._id }],
+        }
+  ).select('_id owner members.user members.role');
+
+  return projects.reduce(
+    (summary, project) => {
+      if (canManageProjectTasks(project, user)) {
+        summary.manageableProjectIds.push(project._id);
+      } else {
+        summary.restrictedProjectIds.push(project._id);
+      }
+
+      return summary;
+    },
+    {
+      manageableProjectIds: [],
+      restrictedProjectIds: [],
+    }
+  );
+};
+
 const toIsoOrNull = (value) => {
   if (!value) return null;
   const date = new Date(value);
@@ -261,7 +301,7 @@ const toIsoOrNull = (value) => {
 
 const getProjectTitle = (project) => project?.title || 'Untitled project';
 
-const serializeSubmission = (submission) => {
+const serializeSubmission = (submission, { includeUploadedBy = true } = {}) => {
   if (!submission?.fileName || !submission?.uploadedAt) {
     return null;
   }
@@ -273,11 +313,14 @@ const serializeSubmission = (submission) => {
     extension: submission.extension || '',
     note: submission.note || '',
     uploadedAt: submission.uploadedAt || null,
-    uploadedBy: mapUserBrief(submission.uploadedBy),
+    uploadedBy: includeUploadedBy ? mapUserBrief(submission.uploadedBy) : null,
   };
 };
 
-const serializeTask = (task) => ({
+const canViewSubmissionUploader = (task, project, user) =>
+  canManageProjectTasks(project, user) || isTaskGiver(task, user);
+
+const serializeTask = (task, { includeSubmissionUploader = true } = {}) => ({
   id: toObjectIdString(task?._id),
   _id: task?._id || null,
   title: task?.title || '',
@@ -298,10 +341,17 @@ const serializeTask = (task) => ({
   completedAt: task?.completedAt || null,
   submissionRequired: !!task?.submissionRequired,
   allowedSubmissionFormats: normalizeAllowedSubmissionFormats(task?.allowedSubmissionFormats),
-  submission: serializeSubmission(task?.submission),
+  submission: serializeSubmission(task?.submission, {
+    includeUploadedBy: includeSubmissionUploader,
+  }),
   createdAt: task?.createdAt || null,
   updatedAt: task?.updatedAt || null,
 });
+
+const serializeTaskForUser = (task, project, user) =>
+  serializeTask(task, {
+    includeSubmissionUploader: canViewSubmissionUploader(task, project, user),
+  });
 
 const snapshotTask = (task) => ({
   title: task?.title || '',
@@ -530,8 +580,8 @@ exports.createTask = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      task: serializeTask(tasks[0]),
-      tasks: tasks.map(serializeTask),
+      task: serializeTaskForUser(tasks[0], project, req.user),
+      tasks: tasks.map((task) => serializeTaskForUser(task, project, req.user)),
       createdCount: tasks.length,
     });
   } catch (error) {
@@ -544,14 +594,29 @@ exports.createTask = async (req, res) => {
 
 exports.getTasks = async (req, res) => {
   try {
-    const projectIds = await getAccessibleProjectIds(req.user);
+    const { manageableProjectIds, restrictedProjectIds } = await getProjectAccessBuckets(req.user);
+    const visibilityClauses = [];
 
-    const query = projectIds.length
-      ? { project: { $in: projectIds } }
-      : { _id: { $in: [] } };
+    if (manageableProjectIds.length > 0) {
+      visibilityClauses.push({ project: { $in: manageableProjectIds } });
+    }
+
+    if (restrictedProjectIds.length > 0) {
+      visibilityClauses.push({
+        project: { $in: restrictedProjectIds },
+        $or: [{ assignedTo: req.user._id }, { assignedBy: req.user._id }],
+      });
+    }
+
+    const query =
+      visibilityClauses.length === 0
+        ? { _id: { $in: [] } }
+        : visibilityClauses.length === 1
+          ? visibilityClauses[0]
+          : { $or: visibilityClauses };
 
     const tasks = await Task.find(query)
-      .populate('project', 'title')
+      .populate('project', 'title owner members.user members.role')
       .populate('assignedTo', 'firstName lastName email avatar')
       .populate('assignedBy', 'firstName lastName email avatar')
       .populate('submission.uploadedBy', 'firstName lastName email avatar')
@@ -559,7 +624,7 @@ exports.getTasks = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      tasks: tasks.map(serializeTask),
+      tasks: tasks.map((task) => serializeTaskForUser(task, task.project, req.user)),
     });
   } catch (error) {
     return res.status(500).json({
@@ -595,8 +660,13 @@ exports.getTasksByProject = async (req, res) => {
       });
     }
 
-    const tasks = await Task.find({ project: projectId })
-      .populate('project', 'title')
+    const query = { project: projectId };
+    if (!canManageProjectTasks(project, req.user)) {
+      query.$or = [{ assignedTo: req.user._id }, { assignedBy: req.user._id }];
+    }
+
+    const tasks = await Task.find(query)
+      .populate('project', 'title owner members.user members.role')
       .populate('assignedTo', 'firstName lastName email avatar')
       .populate('assignedBy', 'firstName lastName email avatar')
       .populate('submission.uploadedBy', 'firstName lastName email avatar')
@@ -604,7 +674,7 @@ exports.getTasksByProject = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      tasks: tasks.map(serializeTask),
+      tasks: tasks.map((task) => serializeTaskForUser(task, project, req.user)),
     });
   } catch (error) {
     return res.status(500).json({
@@ -631,7 +701,7 @@ exports.getMyTasks = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      tasks: tasks.map(serializeTask),
+      tasks: tasks.map((task) => serializeTaskForUser(task, task.project, req.user)),
     });
   } catch (error) {
     return res.status(500).json({
@@ -659,7 +729,7 @@ exports.getTaskById = async (req, res) => {
       });
     }
 
-    if (!canViewProject(project, req.user)) {
+    if (!canViewProject(project, req.user) || !canViewTask(task, project, req.user)) {
       return res.status(403).json({
         success: false,
         error: 'Not authorized to view this task',
@@ -670,7 +740,7 @@ exports.getTaskById = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      task: serializeTask(task),
+      task: serializeTaskForUser(task, project, req.user),
     });
   } catch (error) {
     return res.status(500).json({
@@ -1047,7 +1117,7 @@ exports.updateTask = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      task: serializeTask(task),
+      task: serializeTaskForUser(task, targetProject, req.user),
     });
   } catch (error) {
     return res.status(500).json({
@@ -1159,7 +1229,7 @@ exports.updateTaskStatus = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      task: serializeTask(task),
+      task: serializeTaskForUser(task, project, req.user),
     });
   } catch (error) {
     return res.status(500).json({
@@ -1188,7 +1258,7 @@ exports.uploadTaskSubmission = async (req, res) => {
       });
     }
 
-    if (!canViewProject(project, req.user)) {
+    if (!canViewProject(project, req.user) || !canViewTask(task, project, req.user)) {
       return res.status(403).json({
         success: false,
         error: 'Not authorized to access this task',
@@ -1291,7 +1361,7 @@ exports.uploadTaskSubmission = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      task: serializeTask(task),
+      task: serializeTaskForUser(task, project, req.user),
       message: 'Task work uploaded successfully',
     });
   } catch (error) {
@@ -1320,7 +1390,7 @@ exports.downloadTaskSubmission = async (req, res) => {
       });
     }
 
-    if (!canViewProject(project, req.user)) {
+    if (!canViewProject(project, req.user) || !canViewTask(task, project, req.user)) {
       return res.status(403).json({
         success: false,
         error: 'Not authorized to access this task',

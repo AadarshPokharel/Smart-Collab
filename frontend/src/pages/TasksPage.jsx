@@ -349,6 +349,12 @@ const canUploadTaskSubmission = (task, project, user) => {
   return getEntityId(task.assignedTo) === getEntityId(user);
 };
 
+const canSeeSubmissionUploader = (task, project, user) => {
+  if (!task || !user) return false;
+  if (isProjectManager(project, user)) return true;
+  return getEntityId(task.assignedBy) === getEntityId(user);
+};
+
 const getErrorMessage = (error, fallback) =>
   error?.response?.data?.error ||
   error?.response?.data?.message ||
@@ -1194,6 +1200,7 @@ export default function TasksPage() {
                     const canManageThisTask = isProjectManager(relatedProject, user);
                     const canChangeThisTaskStatus = canUpdateTaskStatus(task, relatedProject, user);
                     const canUploadThisTaskSubmission = canUploadTaskSubmission(task, relatedProject, user);
+                    const showSubmissionUploader = canSeeSubmissionUploader(task, relatedProject, user);
                     const taskHasSubmission = hasTaskSubmission(task);
                     const isStatusUpdating = updatingStatusId === task.id;
                     const isDeletingThisTask = deletingTaskId === task.id;
@@ -1244,7 +1251,9 @@ export default function TasksPage() {
                                       Uploaded file: <span className="font-medium text-slate-900">{task.submission.fileName}</span>
                                     </p>
                                     <p>
-                                      Submitted by {getDisplayName(task.submission.uploadedBy)} on{' '}
+                                      {showSubmissionUploader && task.submission.uploadedBy
+                                        ? `Submitted by ${getDisplayName(task.submission.uploadedBy)} on `
+                                        : 'Submitted on '}
                                       <span className="font-medium text-slate-900">
                                         {formatDateTimeLabel(task.submission.uploadedAt, userTimeZone)}
                                       </span>

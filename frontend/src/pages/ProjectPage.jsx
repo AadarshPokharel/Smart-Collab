@@ -156,6 +156,11 @@ const canUploadTaskWork = (task, canManageTasks, user) => {
   return task?.assignedTo?._id === user?._id || task?.assignedTo?.id === user?._id;
 };
 
+const canSeeTaskSubmissionUploader = (task, canManageTasks, user) => {
+  if (canManageTasks) return true;
+  return task?.assignedBy?._id === user?._id || task?.assignedBy?.id === user?._id;
+};
+
 const SectionCard = ({ title, description, actions = null, children }) => (
   <section className="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm">
     <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
@@ -357,7 +362,9 @@ export default function ProjectPage() {
 
   const nextMeeting = project?.upcomingMeeting || project?.meetings?.[0] || null;
   const resourceCount = project?.sharedResourcesCount ?? project?.sharedResources?.length ?? 0;
-  const openTaskCount = project?.openTasks ?? tasks.filter((task) => task.status !== 'Done').length;
+  const openTaskCount = canManageTasks
+    ? project?.openTasks ?? tasks.filter((task) => task.status !== 'Done').length
+    : tasks.filter((task) => task.status !== 'Done').length;
 
   const updateProjectSnapshot = (nextProject) => {
     setProject(nextProject);
@@ -1442,6 +1449,7 @@ export default function ProjectPage() {
                         const canChangeStatus =
                           canManageTasks || task?.assignedTo?._id === user?._id;
                         const canUploadSubmission = canUploadTaskWork(task, canManageTasks, user);
+                        const showSubmissionUploader = canSeeTaskSubmissionUploader(task, canManageTasks, user);
                         const taskHasSubmission = hasTaskSubmission(task);
                         const isUploadingThisTask = uploadingSubmissionId === (task._id || task.id);
                         const isDownloadingThisTask = downloadingSubmissionId === (task._id || task.id);
@@ -1476,7 +1484,9 @@ export default function ProjectPage() {
                                       File: <span className="font-medium text-slate-900">{task.submission.fileName}</span>
                                     </p>
                                     <p>
-                                      Uploaded by {getUserName(task.submission.uploadedBy)} on{' '}
+                                      {showSubmissionUploader && task.submission.uploadedBy
+                                        ? `Uploaded by ${getUserName(task.submission.uploadedBy)} on `
+                                        : 'Submitted on '}
                                       {formatDateLabel(task.submission.uploadedAt)}
                                     </p>
                                   </div>
