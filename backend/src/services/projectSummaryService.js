@@ -1,5 +1,7 @@
 const Task = require('../models/Task');
 
+const normalizeTaskStatus = (status) => (status === 'Done' ? 'Done' : 'To Do');
+
 const toObjectIdString = (value) => {
   if (!value) return null;
   if (typeof value === 'string') return value;
@@ -64,22 +66,22 @@ const getTaskStatsByProject = async (projectIds = []) => {
     const stats = statsByProjectId.get(projectId);
     stats.totalTasks += 1;
 
-    if (task.status === 'Done') {
+    const normalizedStatus = normalizeTaskStatus(task.status);
+    if (normalizedStatus === 'Done') {
       stats.completedTasks += 1;
-    } else {
-      stats.openTasks += 1;
-      if (task.status === 'To Do') stats.todoTasks += 1;
-      if (task.status === 'In Progress') stats.inProgressTasks += 1;
-      if (task.status === 'In Review') stats.inReviewTasks += 1;
+      return;
+    }
 
-      if (task.dueDate) {
-        const dueDate = new Date(task.dueDate);
-        if (Number.isFinite(dueDate.getTime())) {
-          if (dueDate < startOfToday) {
-            stats.overdueTasks += 1;
-          } else if (dueDate <= soonThreshold) {
-            stats.dueSoonTasks += 1;
-          }
+    stats.openTasks += 1;
+    stats.todoTasks += 1;
+
+    if (task.dueDate) {
+      const dueDate = new Date(task.dueDate);
+      if (Number.isFinite(dueDate.getTime())) {
+        if (dueDate < startOfToday) {
+          stats.overdueTasks += 1;
+        } else if (dueDate <= soonThreshold) {
+          stats.dueSoonTasks += 1;
         }
       }
     }

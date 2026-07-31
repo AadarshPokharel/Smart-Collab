@@ -8,7 +8,8 @@ const {
 } = require('../services/activityService');
 
 const MAX_SUBMISSION_BYTES = 5 * 1024 * 1024;
-const TASK_STATUSES = ['To Do', 'In Progress', 'In Review', 'Done'];
+const TASK_STATUSES = ['To Do', 'Done'];
+const LEGACY_TASK_STATUSES = ['In Progress', 'In Review'];
 const TASK_PRIORITIES = ['Low', 'Medium', 'High'];
 const TASK_ASSIGNMENT_MODES = ['single', 'some', 'all'];
 
@@ -114,9 +115,17 @@ const parseDueDate = (value) => {
   return { hasValue: true, date: parsed };
 };
 
+const normalizeTaskStatus = (status) => {
+  if (status === 'Done' || status === 'Completed') {
+    return 'Done';
+  }
+
+  return 'To Do';
+};
+
 const validateStatus = (status) => {
   if (status === undefined) return null;
-  if (!TASK_STATUSES.includes(status)) {
+  if (!TASK_STATUSES.includes(status) && !LEGACY_TASK_STATUSES.includes(status)) {
     return 'Invalid status';
   }
   return null;
@@ -267,6 +276,12 @@ const populateTaskRelations = async (task) => {
   return task;
 };
 
+const normalizePersistedTaskStatus = (task) => {
+  if (!task) return task;
+  task.status = normalizeTaskStatus(task.status);
+  return task;
+};
+
 const getProjectAccessBuckets = async (user) => {
   const projects = await Project.find(
     isGlobalAdmin(user)
@@ -335,7 +350,7 @@ const serializeTask = (task, { includeSubmissionUploader = true } = {}) => ({
   assignedTo: mapUserBrief(task?.assignedTo),
   assignedBy: mapUserBrief(task?.assignedBy),
   priority: task?.priority || 'Medium',
-  status: task?.status || 'To Do',
+  status: normalizeTaskStatus(task?.status),
   dueDate: task?.dueDate || null,
   dueTimezone: task?.dueTimezone || null,
   completedAt: task?.completedAt || null,
@@ -356,7 +371,7 @@ const serializeTaskForUser = (task, project, user) =>
 const snapshotTask = (task) => ({
   title: task?.title || '',
   description: task?.description || '',
-  status: task?.status || 'To Do',
+  status: normalizeTaskStatus(task?.status),
   priority: task?.priority || 'Medium',
   dueDate: toIsoOrNull(task?.dueDate),
   dueTimezone: task?.dueTimezone || null,
@@ -380,7 +395,7 @@ const buildTaskActivityMetadata = ({ task, projectTitle, actorName, extra = {} }
 });
 
 const validateTaskCompletionRequirements = (task, nextStatus) => {
-  if (nextStatus !== 'Done' || !task?.submissionRequired) {
+  if (normalizeTaskStatus(nextStatus) !== 'Done' || !task?.submissionRequired) {
     return null;
   }
 
@@ -421,6 +436,8 @@ const getTaskAndProject = async (taskId) => {
   if (!task) {
     return { task: null, project: null };
   }
+
+  normalizePersistedTaskStatus(task);
 
   const project = await Project.findById(task.project);
   return { task, project };
@@ -503,8 +520,9 @@ exports.createTask = async (req, res) => {
       });
     }
 
+    const normalizedStatus = normalizeTaskStatus(status);
     const nextSubmissionRequired = submissionRequired === true || submissionRequired === 'true';
-    if (status === 'Done' && nextSubmissionRequired) {
+    if (normalizedStatus === 'Done' && nextSubmissionRequired) {
       return res.status(400).json({
         success: false,
         error: 'A required submission must be uploaded before this task can be created as done.',
@@ -523,17 +541,22 @@ exports.createTask = async (req, res) => {
       assignedTo: assigneeId || null,
       assignedBy: req.user._id,
       priority,
-      status,
+      status: normalizedStatus,
       dueDate: parsedDueDate.hasValue ? parsedDueDate.date : null,
       dueTimezone: normalizedDueTimezone,
-      completedAt: status === 'Done' ? new Date() : null,
+      completedAt: normalizedStatus === 'Done' ? new Date() : null,
       submissionRequired: nextSubmissionRequired,
       allowedSubmissionFormats: normalizedSubmissionFormats,
     }));
 
     const createdTasks = await Task.create(taskPayloads);
     const tasks = Array.isArray(createdTasks) ? createdTasks : [createdTasks];
-    await Promise.all(tasks.map((task) => populateTaskRelations(task)));
+    await Promise.all(
+      tasks.map(async (task) => {
+        await populateTaskRelations(task);
+        normalizePersistedTaskStatus(task);
+      })
+    );
     const actorName = getDisplayName(req.user);
 
     await Promise.all(
@@ -789,6 +812,7 @@ exports.updateTask = async (req, res) => {
     } = req.body;
 
     await populateTaskRelations(task);
+    normalizePersistedTaskStatus(task);
     const beforeSnapshot = {
       ...snapshotTask(task),
       projectTitle: getProjectTitle(currentProject),
@@ -836,7 +860,7 @@ exports.updateTask = async (req, res) => {
       });
     }
     if (status !== undefined) {
-      task.status = status;
+      task.status = normalizeTaskStatus(status);
     }
 
     const priorityError = validatePriority(priority);
@@ -899,10 +923,12 @@ exports.updateTask = async (req, res) => {
       });
     }
 
+    task.status = normalizeTaskStatus(task.status);
     task.completedAt = task.status === 'Done' ? task.completedAt || new Date() : null;
 
     await task.save();
     await populateTaskRelations(task);
+    normalizePersistedTaskStatus(task);
     const afterSnapshot = snapshotTask(task);
 
     const nextAssignedTo = toObjectIdString(task.assignedTo);
@@ -1177,12 +1203,14 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
-    const previousStatus = task.status;
-    task.status = status;
-    task.completedAt = status === 'Done' ? task.completedAt || new Date() : null;
+    const previousStatus = normalizeTaskStatus(task.status);
+    const normalizedStatus = normalizeTaskStatus(status);
+    task.status = normalizedStatus;
+    task.completedAt = normalizedStatus === 'Done' ? task.completedAt || new Date() : null;
 
     await task.save();
     await populateTaskRelations(task);
+    normalizePersistedTaskStatus(task);
 
     if (task.assignedTo) {
       await sendTaskNotification({
@@ -1190,28 +1218,28 @@ exports.updateTaskStatus = async (req, res) => {
         actorId: req.user._id,
         type: 'Info',
         title: 'Task status updated',
-        message: `Task “${task.title}” changed to ${status}.`,
+        message: `Task “${task.title}” changed to ${normalizedStatus}.`,
         entityType: 'Task',
         entityId: task._id,
         metadata: { projectId: toObjectIdString(task.project) },
       });
     }
 
-    if (previousStatus !== status) {
+    if (previousStatus !== normalizedStatus) {
       const actorName = getDisplayName(req.user);
       await recordActivitySafely({
         projectId: task.project?._id || task.project,
         userId: req.user._id,
-        actionType: status === 'Done' ? 'completed' : 'status_changed',
+        actionType: normalizedStatus === 'Done' ? 'completed' : 'status_changed',
         entityType: 'task',
         entityId: task._id,
         title: task.title,
         description:
-          status === 'Done'
+          normalizedStatus === 'Done'
             ? `completed task “${task.title}”`
-            : `changed task “${task.title}” status from ${previousStatus} to ${status}`,
+            : `changed task “${task.title}” status from ${previousStatus} to ${normalizedStatus}`,
         oldValue: { status: previousStatus },
-        newValue: { status },
+        newValue: { status: normalizedStatus },
         projectTitle: getProjectTitle(task.project),
         userName: actorName,
         entityTitle: task.title,
@@ -1221,7 +1249,7 @@ exports.updateTaskStatus = async (req, res) => {
           actorName,
           extra: {
             fromStatus: previousStatus,
-            toStatus: status,
+            toStatus: normalizedStatus,
           },
         }),
       });

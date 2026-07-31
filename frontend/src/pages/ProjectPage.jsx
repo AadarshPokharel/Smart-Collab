@@ -353,8 +353,6 @@ export default function ProjectPage() {
   const taskGroups = useMemo(
     () => ({
       'To Do': tasks.filter((task) => task.status === 'To Do'),
-      'In Progress': tasks.filter((task) => task.status === 'In Progress'),
-      'In Review': tasks.filter((task) => task.status === 'In Review'),
       Done: tasks.filter((task) => task.status === 'Done'),
     }),
     [tasks]
@@ -1244,8 +1242,6 @@ export default function ProjectPage() {
                     className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"
                   >
                     <option>To Do</option>
-                    <option>In Progress</option>
-                    <option>In Review</option>
                     <option>Done</option>
                   </select>
                 </div>
@@ -1430,7 +1426,7 @@ export default function ProjectPage() {
               </form>
             ) : null}
 
-            <div className="grid gap-4 xl:grid-cols-4">
+            <div className="grid gap-4 xl:grid-cols-2">
               {Object.entries(taskGroups).map(([status, items]) => (
                 <div key={status} className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
                   <div className="mb-4 flex items-center justify-between gap-2">
@@ -1537,8 +1533,6 @@ export default function ProjectPage() {
                                 className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-200 disabled:bg-slate-100"
                               >
                                 <option>To Do</option>
-                                <option>In Progress</option>
-                                <option>In Review</option>
                                 <option>Done</option>
                               </select>
                               {canManageTasks && (

@@ -44,7 +44,7 @@ import {
   triggerBlobDownload,
 } from '../utils/taskSubmission';
 
-const TASK_STATUSES = ['To Do', 'In Progress', 'In Review', 'Done'];
+const TASK_STATUSES = ['To Do', 'Done'];
 const TASK_PRIORITIES = ['Low', 'Medium', 'High'];
 const TASK_ASSIGNMENT_OPTIONS = [
   { id: 'single', label: 'One user' },
@@ -240,10 +240,6 @@ const getStatusTone = (status) => {
   switch (status) {
     case 'Done':
       return 'success';
-    case 'In Progress':
-      return 'progress';
-    case 'In Review':
-      return 'review';
     default:
       return 'todo';
   }

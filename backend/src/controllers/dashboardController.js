@@ -25,6 +25,8 @@ const toObjectIdString = (value) => {
   return value._id ? value._id.toString() : value.toString();
 };
 
+const normalizeTaskStatus = (status) => (status === 'Done' ? 'Done' : 'To Do');
+
 const isTaskAssignedToUser = (task, userId) => {
   return toObjectIdString(task.assignedTo) === toObjectIdString(userId);
 };
@@ -60,10 +62,10 @@ const buildStats = ({ projects, tasks, now, userId }) => {
     totalProjects: projects.length,
     tasksDueToday: myTasks.filter((task) => {
       const dueDate = task.dueDate ? new Date(task.dueDate) : null;
-      return dueDate && dueDate >= todayStart && dueDate <= todayEnd && task.status !== 'Done';
+      return dueDate && dueDate >= todayStart && dueDate <= todayEnd && normalizeTaskStatus(task.status) !== 'Done';
     }).length,
-    inProgressTasks: myTasks.filter((task) => task.status === 'In Progress').length,
-    completedTasks: myTasks.filter((task) => task.status === 'Done').length,
+    inProgressTasks: myTasks.filter((task) => normalizeTaskStatus(task.status) !== 'Done').length,
+    completedTasks: myTasks.filter((task) => normalizeTaskStatus(task.status) === 'Done').length,
   };
 };
 
@@ -146,7 +148,7 @@ exports.getDashboardData = async (req, res) => {
           dueDate: task.dueDate,
           dueTimezone: task.dueTimezone,
           priority: task.priority,
-          status: task.status,
+          status: normalizeTaskStatus(task.status),
           description: task.description,
           assignedTo: task.assignedTo
             ? {
