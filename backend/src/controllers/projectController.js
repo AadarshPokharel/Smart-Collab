@@ -2,9 +2,11 @@ const Project = require('../models/Project');
 const Task = require('../models/Task');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
+const Activity = require('../models/Activity');
 const { createNotification, createNotifications } = require('../services/notificationService');
 const {
   getDisplayName,
+  getProjectAdminIds,
   recordActivitySafely,
 } = require('../services/activityService');
 const {
@@ -637,6 +639,18 @@ exports.deleteProject = async (req, res) => {
 
     const actorName = getDisplayName(req.user);
     const projectSnapshot = snapshotProjectForActivity(project);
+    const authorizedAdminIds = getProjectAdminIds(project);
+
+    if (authorizedAdminIds.length > 0) {
+      await Activity.updateMany(
+        { projectId: project._id },
+        {
+          $addToSet: { authorizedAdminIds: { $each: authorizedAdminIds } },
+          $set: { 'metadata.projectDeleted': true },
+        }
+      );
+    }
+
     await Task.deleteMany({ project: req.params.id });
     await Project.findByIdAndDelete(req.params.id);
 
@@ -649,6 +663,7 @@ exports.deleteProject = async (req, res) => {
       title: project.title,
       description: `deleted project “${project.title}”`,
       oldValue: projectSnapshot,
+      authorizedAdminIds,
       projectTitle: project.title,
       userName: actorName,
       entityTitle: project.title,
@@ -656,6 +671,7 @@ exports.deleteProject = async (req, res) => {
         projectTitle: project.title,
         userName: actorName,
         entityTitle: project.title,
+        projectDeleted: true,
       },
     });
 

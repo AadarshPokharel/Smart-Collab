@@ -54,6 +54,13 @@ const activitySchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: {},
     },
+    authorizedAdminIds: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        index: true,
+      },
+    ],
   },
   { timestamps: true }
 );
@@ -62,5 +69,6 @@ activitySchema.index({ projectId: 1, createdAt: -1 });
 activitySchema.index({ userId: 1, createdAt: -1 });
 activitySchema.index({ entityType: 1, createdAt: -1 });
 activitySchema.index({ actionType: 1, createdAt: -1 });
+activitySchema.index({ authorizedAdminIds: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Activity', activitySchema);

@@ -16,9 +16,25 @@ const isProjectMember = (project, userId) => {
   return members.some((member) => toObjectIdString(member?.user) === normalizedUserId);
 };
 
+const getProjectMemberRole = (project, userId) => {
+  if (!project || !userId) return null;
+  const normalizedUserId = toObjectIdString(userId);
+  const members = Array.isArray(project.members) ? project.members : [];
+  const memberRecord =
+    members.find((member) => toObjectIdString(member?.user) === normalizedUserId) || null;
+
+  return memberRecord?.role || null;
+};
+
 const canAccessProject = (project, user) => {
   if (user?.role === 'admin') return true;
-  return isProjectMember(project, user?._id);
+  if (!isProjectMember(project, user?._id)) return false;
+
+  if (toObjectIdString(project?.owner) === toObjectIdString(user?._id)) {
+    return true;
+  }
+
+  return ['Owner', 'ProjectManager'].includes(getProjectMemberRole(project, user?._id));
 };
 
 exports.getActivities = async (req, res) => {

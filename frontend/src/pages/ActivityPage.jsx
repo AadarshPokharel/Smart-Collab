@@ -47,12 +47,11 @@ export default function ActivityPage() {
   const [projects, setProjects] = useState([]);
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
-  const [hasMore, setHasMore] = useState(false);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
   const [filters, setFilters] = useState({
     entityType: 'all',
     userId: 'all',
@@ -155,10 +154,28 @@ export default function ActivityPage() {
     }
   }, []);
 
+  const adminProjects = useMemo(() => {
+    if (user?.role === 'admin') {
+      return projects;
+    }
+
+    return projects.filter((project) => {
+      const ownerId = project?.owner?._id || project?.owner?.id;
+      if (ownerId && ownerId === (user?._id || user?.id)) {
+        return true;
+      }
+
+      return (project?.members || []).some((member) => {
+        const memberId = member?.user?._id || member?.user?.id;
+        return memberId === (user?._id || user?.id) && member?.role === 'ProjectManager';
+      });
+    });
+  }, [projects, user]);
+
   const activityUsers = useMemo(() => {
     const userMap = new Map();
 
-    projects.forEach((project) => {
+    adminProjects.forEach((project) => {
       const owner = project?.owner;
       if (owner?._id || owner?.id) {
         userMap.set(owner._id || owner.id, {
@@ -182,20 +199,15 @@ export default function ActivityPage() {
     return Array.from(userMap.values()).sort((left, right) =>
       left.label.localeCompare(right.label)
     );
-  }, [projects]);
+  }, [adminProjects]);
 
   const loadActivity = useCallback(
-    async ({ nextPage = 1, append = false, silent = false } = {}) => {
+    async ({ nextPage = 1, silent = false } = {}) => {
       try {
-        if (append) {
-          setLoadingMore(true);
-        } else if (silent) {
+        if (silent) {
           setRefreshing(true);
         } else {
           setLoading(true);
-        }
-
-        if (!append) {
           setError('');
         }
 
@@ -212,21 +224,19 @@ export default function ActivityPage() {
         const nextItems = Array.isArray(response?.data) ? response.data : [];
         const pagination = response?.pagination || {};
 
-        setActivities((previous) => (append ? [...previous, ...nextItems] : nextItems));
-        setHasMore(Boolean(pagination.hasMore));
+        setActivities(nextItems);
         setPage(pagination.page || nextPage);
         setTotal(pagination.total || nextItems.length);
+        setTotalPages(pagination.pages || 0);
       } catch (requestError) {
         const message = getErrorMessage(requestError, 'Unable to load activity right now.');
         setError(message);
-        if (!append) {
-          setActivities([]);
-          setHasMore(false);
-          setTotal(0);
-        }
+        setActivities([]);
+        setTotal(0);
+        setTotalPages(0);
+        setPage(1);
       } finally {
         setLoading(false);
-        setLoadingMore(false);
         setRefreshing(false);
       }
     },
@@ -246,7 +256,7 @@ export default function ActivityPage() {
     await Promise.all([
       loadNotifications(),
       loadProjects(),
-      loadActivity({ nextPage: 1, silent: true }),
+      loadActivity({ nextPage: page, silent: true }),
     ]);
   };
 
@@ -433,9 +443,11 @@ export default function ActivityPage() {
           loading={loading}
           error={error}
           onRetry={() => loadActivity({ nextPage: 1 })}
-          onLoadMore={hasMore ? () => loadActivity({ nextPage: page + 1, append: true }) : null}
-          hasMore={hasMore}
-          loadingMore={loadingMore}
+          page={page}
+          totalPages={totalPages}
+          totalItems={total}
+          pageSize={DEFAULT_LIMIT}
+          onPageChange={(nextPage) => loadActivity({ nextPage })}
           onOpenProject={(projectId) => navigate(`/projects/${projectId}`)}
           emptyTitle="No matching activity found"
           emptyDescription="Try adjusting the filters or search term to see more project history."

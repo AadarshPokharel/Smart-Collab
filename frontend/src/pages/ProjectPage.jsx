@@ -213,10 +213,10 @@ export default function ProjectPage() {
   const [editingResourceId, setEditingResourceId] = useState('');
   const [projectActivities, setProjectActivities] = useState([]);
   const [activityLoading, setActivityLoading] = useState(false);
-  const [activityLoadingMore, setActivityLoadingMore] = useState(false);
   const [activityError, setActivityError] = useState('');
   const [activityPage, setActivityPage] = useState(1);
-  const [activityHasMore, setActivityHasMore] = useState(false);
+  const [activityTotalPages, setActivityTotalPages] = useState(0);
+  const [activityTotal, setActivityTotal] = useState(0);
   const [activityEntityFilter, setActivityEntityFilter] = useState('all');
 
   const activeTab = TAB_OPTIONS.includes(searchParams.get('tab'))
@@ -324,14 +324,10 @@ export default function ProjectPage() {
   };
 
   const loadProjectActivity = useCallback(
-    async ({ nextPage = 1, append = false } = {}) => {
+    async ({ nextPage = 1 } = {}) => {
       try {
-        if (append) {
-          setActivityLoadingMore(true);
-        } else {
-          setActivityLoading(true);
-          setActivityError('');
-        }
+        setActivityLoading(true);
+        setActivityError('');
 
         const response = await fetchProjectActivities(id, {
           page: nextPage,
@@ -341,9 +337,10 @@ export default function ProjectPage() {
         const nextItems = Array.isArray(response?.data) ? response.data : [];
         const pagination = response?.pagination || {};
 
-        setProjectActivities((previous) => (append ? [...previous, ...nextItems] : nextItems));
+        setProjectActivities(nextItems);
         setActivityPage(pagination.page || nextPage);
-        setActivityHasMore(Boolean(pagination.hasMore));
+        setActivityTotalPages(pagination.pages || 0);
+        setActivityTotal(pagination.total || nextItems.length);
       } catch (error) {
         setActivityError(
           error?.response?.data?.message ||
@@ -351,13 +348,12 @@ export default function ProjectPage() {
             error?.message ||
             'Unable to load project activity right now.'
         );
-        if (!append) {
-          setProjectActivities([]);
-          setActivityHasMore(false);
-        }
+        setProjectActivities([]);
+        setActivityTotalPages(0);
+        setActivityTotal(0);
+        setActivityPage(1);
       } finally {
         setActivityLoading(false);
-        setActivityLoadingMore(false);
       }
     },
     [activityEntityFilter, id]
@@ -1572,13 +1568,11 @@ export default function ProjectPage() {
               loading={activityLoading}
               error={activityError}
               onRetry={() => loadProjectActivity({ nextPage: 1 })}
-              onLoadMore={
-                activityHasMore
-                  ? () => loadProjectActivity({ nextPage: activityPage + 1, append: true })
-                  : null
-              }
-              hasMore={activityHasMore}
-              loadingMore={activityLoadingMore}
+              page={activityPage}
+              totalPages={activityTotalPages}
+              totalItems={activityTotal}
+              pageSize={8}
+              onPageChange={(nextPage) => loadProjectActivity({ nextPage })}
               showProject={false}
               emptyTitle="No project activity yet"
               emptyDescription="Project actions will appear here as teammates create tasks, send messages, schedule meetings, and share resources."

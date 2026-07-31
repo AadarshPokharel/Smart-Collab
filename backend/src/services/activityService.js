@@ -30,6 +30,13 @@ const normalizePage = (value) => {
   return Math.max(parsed, 1);
 };
 
+const normalizeIdList = (values = []) =>
+  Array.from(
+    new Set(
+      (Array.isArray(values) ? values : [values]).map((value) => toObjectIdString(value)).filter(Boolean)
+    )
+  );
+
 const parseDateBoundary = (value, { endOfDay = false } = {}) => {
   if (!value) return null;
 
@@ -47,18 +54,70 @@ const parseDateBoundary = (value, { endOfDay = false } = {}) => {
   return parsed;
 };
 
+const getProjectAdminIds = (project) => {
+  const adminIds = new Set();
+
+  const ownerId = toObjectIdString(project?.owner);
+  if (ownerId) {
+    adminIds.add(ownerId);
+  }
+
+  const members = Array.isArray(project?.members) ? project.members : [];
+  members.forEach((member) => {
+    if (!['Owner', 'ProjectManager'].includes(member?.role)) {
+      return;
+    }
+
+    const memberId = toObjectIdString(member?.user);
+    if (memberId) {
+      adminIds.add(memberId);
+    }
+  });
+
+  return Array.from(adminIds);
+};
+
 const buildProjectAccessQuery = (user) => {
   if (user?.role === 'admin') {
     return {};
   }
 
   return {
-    $or: [{ owner: user?._id }, { 'members.user': user?._id }],
+    $or: [
+      { owner: user?._id },
+      {
+        members: {
+          $elemMatch: {
+            user: user?._id,
+            role: { $in: ['Owner', 'ProjectManager'] },
+          },
+        },
+      },
+    ],
   };
 };
 
 const getAccessibleProjects = async (user) => {
-  return Project.find(buildProjectAccessQuery(user)).select('_id title');
+  return Project.find(buildProjectAccessQuery(user)).select('_id title owner members.user members.role');
+};
+
+const loadAuthorizedAdminIds = async (projectId, projectCache = new Map()) => {
+  const normalizedProjectId = toObjectIdString(projectId);
+  if (!normalizedProjectId) {
+    return [];
+  }
+
+  if (!projectCache.has(normalizedProjectId)) {
+    projectCache.set(
+      normalizedProjectId,
+      Project.findById(projectId)
+        .select('owner members.user members.role')
+        .then((project) => getProjectAdminIds(project))
+        .catch(() => [])
+    );
+  }
+
+  return projectCache.get(normalizedProjectId);
 };
 
 const buildSearchText = ({
@@ -186,10 +245,17 @@ const recordActivity = async ({
   projectTitle = '',
   userName = '',
   entityTitle = '',
+  authorizedAdminIds = [],
+  projectCache = new Map(),
 }) => {
   if (!projectId || !userId || !actionType || !entityType || !title || !description) {
     return null;
   }
+
+  const resolvedAuthorizedAdminIds =
+    normalizeIdList(authorizedAdminIds).length > 0
+      ? normalizeIdList(authorizedAdminIds)
+      : await loadAuthorizedAdminIds(projectId, projectCache);
 
   const activity = await Activity.create({
     projectId,
@@ -201,6 +267,7 @@ const recordActivity = async ({
     description,
     oldValue,
     newValue,
+    authorizedAdminIds: resolvedAuthorizedAdminIds,
     metadata: buildMetadata({
       metadata,
       projectTitle,
@@ -231,7 +298,10 @@ const recordActivitiesSafely = async (entries = []) => {
     return [];
   }
 
-  return Promise.all(validEntries.map((entry) => recordActivitySafely(entry)));
+  const projectCache = new Map();
+  return Promise.all(
+    validEntries.map((entry) => recordActivitySafely({ ...entry, projectCache }))
+  );
 };
 
 const fetchActivities = async ({
@@ -249,13 +319,22 @@ const fetchActivities = async ({
   const accessibleProjects = await getAccessibleProjects(user);
   const accessibleProjectIds = accessibleProjects.map((project) => project._id);
   const accessibleProjectIdSet = new Set(accessibleProjectIds.map((value) => value.toString()));
+  const normalizedPage = normalizePage(page);
+  const normalizedLimit = normalizeLimit(limit);
+  const visibilityClauses =
+    user?.role === 'admin'
+      ? []
+      : [
+          ...(accessibleProjectIds.length > 0 ? [{ projectId: { $in: accessibleProjectIds } }] : []),
+          ...(user?._id ? [{ authorizedAdminIds: user._id }] : []),
+        ];
 
-  if (!accessibleProjectIds.length) {
+  if (user?.role !== 'admin' && visibilityClauses.length === 0) {
     return {
       data: [],
       pagination: {
-        page: normalizePage(page),
-        limit: normalizeLimit(limit),
+        page: normalizedPage,
+        limit: normalizedLimit,
         total: 0,
         pages: 0,
         hasMore: false,
@@ -265,11 +344,7 @@ const fetchActivities = async ({
     };
   }
 
-  const normalizedPage = normalizePage(page);
-  const normalizedLimit = normalizeLimit(limit);
-  const query = {
-    projectId: { $in: accessibleProjectIds },
-  };
+  const query = user?.role === 'admin' ? {} : { $or: visibilityClauses };
 
   if (projectId) {
     query.projectId = projectId;
@@ -341,6 +416,7 @@ module.exports = {
   getDisplayName,
   buildProjectAccessQuery,
   getAccessibleProjects,
+  getProjectAdminIds,
   fetchActivities,
   recordActivity,
   recordActivitySafely,
