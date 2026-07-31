@@ -10,6 +10,7 @@ const {
 const MAX_SUBMISSION_BYTES = 5 * 1024 * 1024;
 const TASK_STATUSES = ['To Do', 'In Progress', 'In Review', 'Done'];
 const TASK_PRIORITIES = ['Low', 'Medium', 'High'];
+const TASK_ASSIGNMENT_MODES = ['single', 'some', 'all'];
 
 const toObjectIdString = (value) => {
   if (!value) return null;
@@ -128,6 +129,85 @@ const validateAssigneeInProject = (project, assignedTo) => {
   }
 
   return 'Assigned user must belong to the selected project';
+};
+
+const getAssignableProjectUserIds = (project) => {
+  const userIds = new Set();
+
+  const ownerId = toObjectIdString(project?.owner);
+  if (ownerId) {
+    userIds.add(ownerId);
+  }
+
+  const members = Array.isArray(project?.members) ? project.members : [];
+  members.forEach((member) => {
+    const memberId = toObjectIdString(member?.user);
+    if (memberId) {
+      userIds.add(memberId);
+    }
+  });
+
+  return Array.from(userIds);
+};
+
+const normalizeAssigneeIds = (assignedToIds) => {
+  const source = Array.isArray(assignedToIds)
+    ? assignedToIds
+    : typeof assignedToIds === 'string'
+      ? assignedToIds.split(',')
+      : [];
+
+  return Array.from(
+    new Set(source.map((entry) => toObjectIdString(entry)).filter(Boolean))
+  );
+};
+
+const resolveTaskAssignmentTargets = ({ project, assignmentMode, assignedTo, assignedToIds }) => {
+  const normalizedMode = TASK_ASSIGNMENT_MODES.includes(assignmentMode)
+    ? assignmentMode
+    : 'single';
+
+  if (normalizedMode === 'all') {
+    const allUserIds = getAssignableProjectUserIds(project);
+    if (allUserIds.length === 0) {
+      return { error: 'No assignable users were found in this project' };
+    }
+
+    return {
+      assignmentMode: normalizedMode,
+      assigneeIds: allUserIds,
+    };
+  }
+
+  if (normalizedMode === 'some') {
+    const selectedIds = normalizeAssigneeIds(assignedToIds);
+    if (selectedIds.length === 0) {
+      return { error: 'Choose at least one user when assigning to some members' };
+    }
+
+    const invalidUserIds = selectedIds.filter(
+      (userId) => validateAssigneeInProject(project, userId) !== null
+    );
+
+    if (invalidUserIds.length > 0) {
+      return { error: 'Assigned users must belong to the selected project' };
+    }
+
+    return {
+      assignmentMode: normalizedMode,
+      assigneeIds: selectedIds,
+    };
+  }
+
+  const assigneeError = validateAssigneeInProject(project, assignedTo);
+  if (assigneeError) {
+    return { error: assigneeError };
+  }
+
+  return {
+    assignmentMode: normalizedMode,
+    assigneeIds: assignedTo ? [toObjectIdString(assignedTo)] : [null],
+  };
 };
 
 const normalizeAllowedSubmissionFormats = (value) => {
@@ -303,6 +383,8 @@ exports.createTask = async (req, res) => {
       description,
       projectId,
       assignedTo,
+      assignedToIds = [],
+      assignmentMode = 'single',
       priority = 'Medium',
       status = 'To Do',
       dueDate,
@@ -350,11 +432,16 @@ exports.createTask = async (req, res) => {
       });
     }
 
-    const assigneeError = validateAssigneeInProject(project, assignedTo);
-    if (assigneeError) {
+    const assignmentTargets = resolveTaskAssignmentTargets({
+      project,
+      assignmentMode,
+      assignedTo,
+      assignedToIds,
+    });
+    if (assignmentTargets.error) {
       return res.status(400).json({
         success: false,
-        error: assigneeError,
+        error: assignmentTargets.error,
       });
     }
 
@@ -374,62 +461,78 @@ exports.createTask = async (req, res) => {
       });
     }
 
-    const task = await Task.create({
+    const normalizedDescription = typeof description === 'string' ? description.trim() : '';
+    const normalizedDueTimezone =
+      typeof dueTimezone === 'string' && dueTimezone.trim() ? dueTimezone.trim() : null;
+    const normalizedSubmissionFormats =
+      normalizeAllowedSubmissionFormats(allowedSubmissionFormats);
+    const taskPayloads = assignmentTargets.assigneeIds.map((assigneeId) => ({
       title: normalizedTitle,
-      description: typeof description === 'string' ? description.trim() : '',
+      description: normalizedDescription,
       project: project._id,
-      assignedTo: assignedTo || null,
+      assignedTo: assigneeId || null,
       assignedBy: req.user._id,
       priority,
       status,
       dueDate: parsedDueDate.hasValue ? parsedDueDate.date : null,
-      dueTimezone: typeof dueTimezone === 'string' && dueTimezone.trim() ? dueTimezone.trim() : null,
+      dueTimezone: normalizedDueTimezone,
       completedAt: status === 'Done' ? new Date() : null,
       submissionRequired: nextSubmissionRequired,
-      allowedSubmissionFormats: normalizeAllowedSubmissionFormats(allowedSubmissionFormats),
-    });
+      allowedSubmissionFormats: normalizedSubmissionFormats,
+    }));
 
-    await populateTaskRelations(task);
+    const createdTasks = await Task.create(taskPayloads);
+    const tasks = Array.isArray(createdTasks) ? createdTasks : [createdTasks];
+    await Promise.all(tasks.map((task) => populateTaskRelations(task)));
     const actorName = getDisplayName(req.user);
 
-    await sendTaskNotification({
-      recipientId: task.assignedTo,
-      actorId: req.user._id,
-      type: 'TaskAssigned',
-      title: 'Task assigned',
-      message: `You were assigned “${task.title}”.`,
-      entityType: 'Task',
-      entityId: task._id,
-      metadata: { projectId: project._id.toString() },
-    });
+    await Promise.all(
+      tasks.map((task) =>
+        sendTaskNotification({
+          recipientId: task.assignedTo,
+          actorId: req.user._id,
+          type: 'TaskAssigned',
+          title: 'Task assigned',
+          message: `You were assigned “${task.title}”.`,
+          entityType: 'Task',
+          entityId: task._id,
+          metadata: { projectId: project._id.toString() },
+        })
+      )
+    );
 
-    await recordActivitySafely({
-      projectId: project._id,
-      userId: req.user._id,
-      actionType: 'created',
-      entityType: 'task',
-      entityId: task._id,
-      title: task.title,
-      description: `created task “${task.title}”`,
-      newValue: snapshotTask(task),
-      projectTitle: project.title,
-      userName: actorName,
-      entityTitle: task.title,
-      metadata: buildTaskActivityMetadata({
-        task,
+    await recordActivitiesSafely(
+      tasks.map((task) => ({
+        projectId: project._id,
+        userId: req.user._id,
+        actionType: 'created',
+        entityType: 'task',
+        entityId: task._id,
+        title: task.title,
+        description: `created task “${task.title}”`,
+        newValue: snapshotTask(task),
         projectTitle: project.title,
-        actorName,
-        extra: {
-          assignedToName: task.assignedTo ? getDisplayName(task.assignedTo) : 'Unassigned',
-          status: task.status,
-          priority: task.priority,
-        },
-      }),
-    });
+        userName: actorName,
+        entityTitle: task.title,
+        metadata: buildTaskActivityMetadata({
+          task,
+          projectTitle: project.title,
+          actorName,
+          extra: {
+            assignedToName: task.assignedTo ? getDisplayName(task.assignedTo) : 'Unassigned',
+            status: task.status,
+            priority: task.priority,
+            assignmentMode: assignmentTargets.assignmentMode,
+          },
+        }),
+      }))
+    );
 
     return res.status(201).json({
       success: true,
-      task: serializeTask(task),
+      task: serializeTask(tasks[0]),
+      tasks: tasks.map(serializeTask),
+      createdCount: tasks.length,
     });
   } catch (error) {
     return res.status(500).json({

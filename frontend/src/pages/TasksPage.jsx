@@ -46,6 +46,11 @@ import {
 
 const TASK_STATUSES = ['To Do', 'In Progress', 'In Review', 'Done'];
 const TASK_PRIORITIES = ['Low', 'Medium', 'High'];
+const TASK_ASSIGNMENT_OPTIONS = [
+  { id: 'single', label: 'One user' },
+  { id: 'some', label: 'Some users' },
+  { id: 'all', label: 'All users' },
+];
 const FILTER_OPTIONS = [
   { id: 'all', label: 'All' },
   { id: 'assigned_to_me', label: 'Assigned to Me' },
@@ -384,7 +389,9 @@ export default function TasksPage() {
     title: '',
     description: '',
     projectId: '',
+    assignmentMode: 'single',
     assignedTo: '',
+    assignedToIds: [],
     priority: 'Medium',
     status: 'To Do',
     dueDate: '',
@@ -539,12 +546,23 @@ export default function TasksPage() {
   );
 
   useEffect(() => {
-    if (!taskForm.assignedTo) return;
-    const assigneeStillValid = selectedProjectUsers.some((member) => member.id === taskForm.assignedTo);
-    if (!assigneeStillValid) {
-      setTaskForm((current) => ({ ...current, assignedTo: '' }));
+    const validUserIds = new Set(selectedProjectUsers.map((member) => member.id));
+
+    if (taskForm.assignmentMode === 'single') {
+      if (!taskForm.assignedTo) return;
+      if (!validUserIds.has(taskForm.assignedTo)) {
+        setTaskForm((current) => ({ ...current, assignedTo: '' }));
+      }
+      return;
     }
-  }, [selectedProjectUsers, taskForm.assignedTo]);
+
+    if (taskForm.assignmentMode === 'some' && taskForm.assignedToIds.length > 0) {
+      const nextAssignedToIds = taskForm.assignedToIds.filter((id) => validUserIds.has(id));
+      if (nextAssignedToIds.length !== taskForm.assignedToIds.length) {
+        setTaskForm((current) => ({ ...current, assignedToIds: nextAssignedToIds }));
+      }
+    }
+  }, [selectedProjectUsers, taskForm.assignedTo, taskForm.assignedToIds, taskForm.assignmentMode]);
 
   const overview = useMemo(() => {
     const openTasks = tasks.filter((task) => task.status !== 'Done').length;
@@ -621,7 +639,9 @@ export default function TasksPage() {
       title: '',
       description: '',
       projectId: manageableProjects[0] ? getEntityId(manageableProjects[0]) : '',
+      assignmentMode: 'single',
       assignedTo: '',
+      assignedToIds: [],
       priority: 'Medium',
       status: 'To Do',
       dueDate: '',
@@ -654,7 +674,9 @@ export default function TasksPage() {
       title: task.title || '',
       description: task.description || '',
       projectId: task.projectId || '',
+      assignmentMode: 'single',
       assignedTo: getEntityId(task.assignedTo),
+      assignedToIds: getEntityId(task.assignedTo) ? [getEntityId(task.assignedTo)] : [],
       priority: task.priority || 'Medium',
       status: task.status || 'To Do',
       dueDate: formatDateInputValue(task.dueDate),
@@ -677,6 +699,27 @@ export default function TasksPage() {
     }));
   };
 
+  const handleTaskAssignmentModeChange = (mode) => {
+    setTaskForm((current) => ({
+      ...current,
+      assignmentMode: mode,
+      assignedTo: mode === 'single' ? current.assignedTo : '',
+      assignedToIds: mode === 'some' ? current.assignedToIds : [],
+    }));
+  };
+
+  const toggleTaskAssigneeSelection = (userId) => {
+    setTaskForm((current) => {
+      const exists = current.assignedToIds.includes(userId);
+      return {
+        ...current,
+        assignedToIds: exists
+          ? current.assignedToIds.filter((id) => id !== userId)
+          : [...current.assignedToIds, userId],
+      };
+    });
+  };
+
   const handleSaveTask = async (event) => {
     event.preventDefault();
 
@@ -688,6 +731,11 @@ export default function TasksPage() {
 
     if (!taskForm.projectId) {
       setFormError('Please select a project.');
+      return;
+    }
+
+    if (!taskBeingEdited && taskForm.assignmentMode === 'some' && taskForm.assignedToIds.length === 0) {
+      setFormError('Choose at least one user for this task.');
       return;
     }
 
@@ -703,6 +751,13 @@ export default function TasksPage() {
       allowedSubmissionFormats: taskForm.allowedSubmissionFormats,
     };
 
+    if (!taskBeingEdited) {
+      payload.assignmentMode = taskForm.assignmentMode;
+      if (taskForm.assignmentMode === 'some') {
+        payload.assignedToIds = taskForm.assignedToIds;
+      }
+    }
+
     try {
       setSavingTask(true);
       setFormError('');
@@ -711,13 +766,30 @@ export default function TasksPage() {
         await taskService.updateTask(taskBeingEdited.id, payload);
         toast.success('Task updated successfully');
       } else {
-        await taskService.createTaskRecord(payload);
-        toast.success('Task created successfully');
+        const response = await taskService.createTaskRecord(payload);
+        const createdTasks = Array.isArray(response?.data?.tasks)
+          ? response.data.tasks.map(normalizeTask)
+          : response?.data?.task
+            ? [normalizeTask(response.data.task)]
+            : [];
+
+        if (createdTasks.length > 0) {
+          setTasks((previous) => sortTasks([...createdTasks, ...previous]));
+        }
+
+        const createdCount = response?.data?.createdCount || createdTasks.length || 1;
+        toast.success(
+          createdCount > 1
+            ? `${createdCount} tasks created successfully`
+            : 'Task created successfully'
+        );
       }
 
       setShowTaskModal(false);
       resetTaskForm();
-      await loadTaskPageData({ showSpinner: false });
+      if (taskBeingEdited?.id) {
+        await loadTaskPageData({ showSpinner: false });
+      }
     } catch (requestError) {
       const message = getErrorMessage(requestError, 'Unable to save this task.');
       setFormError(message);
@@ -1396,25 +1468,6 @@ export default function TasksPage() {
 
                 <div>
                   <label className="mb-2 block text-sm font-semibold text-slate-700">
-                    Assignee
-                  </label>
-                  <select
-                    value={taskForm.assignedTo}
-                    onChange={(event) => handleTaskFormChange('assignedTo', event.target.value)}
-                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"
-                    disabled={!taskForm.projectId}
-                  >
-                    <option value="">Unassigned</option>
-                    {selectedProjectUsers.map((member) => (
-                      <option key={member.id} value={member.id}>
-                        {member.name} {member.role ? `(${member.role})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="mb-2 block text-sm font-semibold text-slate-700">
                     Priority
                   </label>
                   <select
@@ -1457,6 +1510,112 @@ export default function TasksPage() {
                     onChange={(event) => handleTaskFormChange('dueDate', event.target.value)}
                     className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"
                   />
+                </div>
+
+                <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                  <label className="mb-3 block text-sm font-semibold text-slate-700">
+                    {taskBeingEdited ? 'Assignee' : 'Assign task'}
+                  </label>
+
+                  {!taskBeingEdited ? (
+                    <div className="mb-4 flex flex-wrap gap-2">
+                      {TASK_ASSIGNMENT_OPTIONS.map((option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => handleTaskAssignmentModeChange(option.id)}
+                          className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                            taskForm.assignmentMode === option.id
+                              ? 'border-violet-200 bg-violet-100 text-violet-700'
+                              : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+                          }`}
+                          disabled={!taskForm.projectId}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {!taskForm.projectId ? (
+                    <p className="text-sm text-slate-500">
+                      Select a project first to choose assignees.
+                    </p>
+                  ) : null}
+
+                  {taskForm.projectId && (taskBeingEdited || taskForm.assignmentMode === 'single') ? (
+                    <select
+                      value={taskForm.assignedTo}
+                      onChange={(event) => handleTaskFormChange('assignedTo', event.target.value)}
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"
+                    >
+                      <option value="">Unassigned</option>
+                      {selectedProjectUsers.map((member) => (
+                        <option key={member.id} value={member.id}>
+                          {member.name} {member.role ? `(${member.role})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+
+                  {taskForm.projectId && !taskBeingEdited && taskForm.assignmentMode === 'some' ? (
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-500">
+                        <span>
+                          {taskForm.assignedToIds.length} user
+                          {taskForm.assignedToIds.length === 1 ? '' : 's'} selected
+                        </span>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setTaskForm((current) => ({
+                                ...current,
+                                assignedToIds: selectedProjectUsers.map((member) => member.id),
+                              }))
+                            }
+                            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
+                          >
+                            Select all
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setTaskForm((current) => ({ ...current, assignedToIds: [] }))
+                            }
+                            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid max-h-56 gap-2 overflow-y-auto pr-1 md:grid-cols-2">
+                        {selectedProjectUsers.map((member) => (
+                          <label
+                            key={member.id}
+                            className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={taskForm.assignedToIds.includes(member.id)}
+                              onChange={() => toggleTaskAssigneeSelection(member.id)}
+                              className="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-200"
+                            />
+                            <span>
+                              {member.name} {member.role ? `(${member.role})` : ''}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {taskForm.projectId && !taskBeingEdited && taskForm.assignmentMode === 'all' ? (
+                    <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-sm text-violet-700">
+                      This will create one task for every user in the selected project.
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
