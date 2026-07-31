@@ -72,7 +72,9 @@ export default function GoogleAuthButton({
       setMessage(
         error?.code === 'auth/popup-closed-by-user'
           ? 'Google sign-in was cancelled.'
-          : (error?.message || 'Google sign-in is unavailable right now.')
+          : error?.code === 'auth/popup-blocked'
+            ? 'Google sign-in pop-up was blocked. Allow pop-ups for SmartCollab and try again.'
+            : (error?.message || 'Google sign-in is unavailable right now.')
       );
       setMessageTone('error');
     } finally {

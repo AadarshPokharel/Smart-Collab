@@ -37,6 +37,40 @@ const projectSchema = new mongoose.Schema(
         },
       },
     ],
+    pendingInvites: [
+      {
+        user: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          required: true,
+        },
+        email: {
+          type: String,
+          required: true,
+          trim: true,
+          lowercase: true,
+        },
+        role: {
+          type: String,
+          enum: ['Owner', 'ProjectManager', 'Member'],
+          default: 'Member',
+        },
+        invitedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          required: true,
+        },
+        status: {
+          type: String,
+          enum: ['pending'],
+          default: 'pending',
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
     milestones: [
       {
         title: {

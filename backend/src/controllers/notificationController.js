@@ -1,6 +1,12 @@
 const Notification = require('../models/Notification');
 const { syncDeadlineReminderNotificationsForUser } = require('../services/notificationService');
 
+const isPendingProjectInvite = (notification) =>
+  ['ProjectInvite', 'project_invite'].includes(notification?.type) &&
+  notification?.metadata?.invitationStatus === 'pending' &&
+  notification?.metadata?.invitationId &&
+  notification?.metadata?.projectId;
+
 const formatNotification = (notification) => ({
   id: notification._id,
   type: notification.type,
@@ -112,7 +118,7 @@ exports.markAllNotificationsRead = async (req, res) => {
 
 exports.deleteNotification = async (req, res) => {
   try {
-    const notification = await Notification.findOneAndDelete({
+    const notification = await Notification.findOne({
       _id: req.params.id,
       user: req.user._id,
     });
@@ -123,6 +129,15 @@ exports.deleteNotification = async (req, res) => {
         error: 'Notification not found',
       });
     }
+
+    if (isPendingProjectInvite(notification)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Respond to the project invitation before removing this notification',
+      });
+    }
+
+    await notification.deleteOne();
 
     res.status(200).json({
       success: true,
@@ -138,7 +153,19 @@ exports.deleteNotification = async (req, res) => {
 
 exports.clearNotifications = async (req, res) => {
   try {
-    await Notification.deleteMany({ user: req.user._id });
+    await Notification.deleteMany({
+      user: req.user._id,
+      $nor: [
+        {
+          type: 'ProjectInvite',
+          'metadata.invitationStatus': 'pending',
+        },
+        {
+          type: 'project_invite',
+          'metadata.invitationStatus': 'pending',
+        },
+      ],
+    });
 
     res.status(200).json({
       success: true,

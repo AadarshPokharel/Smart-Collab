@@ -150,6 +150,21 @@ const serializeResource = (resource) => {
   };
 };
 
+const serializePendingInvite = (invite) => {
+  if (!invite) return null;
+
+  return {
+    id: toObjectIdString(invite._id) || null,
+    _id: invite._id || null,
+    email: invite.email || '',
+    role: invite.role || 'Member',
+    status: invite.status || 'pending',
+    createdAt: invite.createdAt || null,
+    user: mapUserBrief(invite.user),
+    invitedBy: mapUserBrief(invite.invitedBy),
+  };
+};
+
 const serializeProjectSummary = (project, stats = buildEmptyTaskStats()) => {
   const meetings = Array.isArray(project?.meetings) ? project.meetings : [];
   const resources = Array.isArray(project?.sharedResources) ? project.sharedResources : [];
@@ -186,6 +201,10 @@ const serializeProjectDetail = (project, stats = buildEmptyTaskStats()) => {
 
   return {
     ...summary,
+    pendingInvites: [...(project?.pendingInvites || [])]
+      .sort((left, right) => new Date(right?.createdAt || 0) - new Date(left?.createdAt || 0))
+      .map(serializePendingInvite)
+      .filter(Boolean),
     meetings: sortMeetings(project?.meetings || []).map(serializeMeeting).filter(Boolean),
     sharedResources: [...(project?.sharedResources || [])]
       .sort((left, right) => new Date(right?.createdAt || 0) - new Date(left?.createdAt || 0))
@@ -200,6 +219,7 @@ module.exports = {
   getTaskStatsByProject,
   serializeMeeting,
   serializeResource,
+  serializePendingInvite,
   serializeProjectSummary,
   serializeProjectDetail,
 };

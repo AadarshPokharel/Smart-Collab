@@ -268,6 +268,7 @@ export default function ProjectPage() {
   }, [project, user?._id]);
 
   const isOwner = project?.owner?._id === user?._id || user?.role === 'admin';
+  const pendingInvites = Array.isArray(project?.pendingInvites) ? project.pendingInvites : [];
   const canManageTasks = isOwner || currentMemberRole === 'ProjectManager';
   const canCollaborate = Boolean(project && (isOwner || currentMemberRole || project.owner?._id === user?._id));
 
@@ -1204,6 +1205,38 @@ export default function ProjectPage() {
                   </div>
                 </div>
               ))}
+              {isOwner && pendingInvites.length > 0 ? (
+                <div className="space-y-3 pt-2">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                    <CalendarClock size={16} className="text-amber-600" />
+                    Pending invitations
+                  </div>
+                  {pendingInvites.map((invite) => (
+                    <div
+                      key={invite._id || invite.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-4"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-900">
+                          {getUserName(invite.user) || invite.email}
+                        </p>
+                        <p className="text-xs text-slate-500">{invite.email}</p>
+                        <p className="mt-1 text-xs text-amber-700">
+                          Invited {formatDateLabel(invite.createdAt, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600">
+                          {invite.role || 'Member'}
+                        </span>
+                        <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">
+                          Pending
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
           </SectionCard>
         </div>

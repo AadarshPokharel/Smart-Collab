@@ -95,7 +95,7 @@ export const AuthProvider = ({ children }) => {
       case 'auth/popup-closed-by-user':
         return 'Google sign-in was cancelled.';
       case 'auth/popup-blocked':
-        return 'Your browser blocked the Google sign-in popup.';
+        return 'Google sign-in pop-up was blocked. Allow pop-ups for SmartCollab and try again.';
       case 'auth/account-exists-with-different-credential':
         return 'An account already exists with that email using a different sign-in method.';
       case 'auth/invalid-login-credentials':

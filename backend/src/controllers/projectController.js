@@ -1,6 +1,7 @@
 const Project = require('../models/Project');
 const Task = require('../models/Task');
 const User = require('../models/User');
+const Notification = require('../models/Notification');
 const { createNotification, createNotifications } = require('../services/notificationService');
 const {
   getDisplayName,
@@ -40,6 +41,8 @@ const canManageProject = (project, user) =>
 const canCollaborateOnProject = (project, user) =>
   canAccessProject(project, user);
 
+const normalizeEmail = (value = '') => String(value).trim().toLowerCase();
+
 const normalizeFutureDate = (value, label = 'dueDate') => {
   if (value === undefined) return { hasValue: false, date: undefined };
   if (value === null || value === '') return { hasValue: true, date: null };
@@ -68,6 +71,15 @@ const snapshotProjectForActivity = (project) => ({
   status: project?.status || 'Active',
   dueDate: toIsoOrNull(project?.dueDate),
   dueTimezone: project?.dueTimezone || null,
+});
+
+const snapshotPendingInviteForActivity = (invite, fallbackUser = null) => ({
+  invitationId: toObjectIdString(invite?._id),
+  memberId: toObjectIdString(invite?.user) || toObjectIdString(fallbackUser?._id),
+  memberName: getDisplayName(invite?.user || fallbackUser),
+  email: invite?.email || fallbackUser?.email || '',
+  role: invite?.role || 'Member',
+  status: invite?.status || 'pending',
 });
 
 const snapshotMeetingForActivity = (meeting) => ({
@@ -109,10 +121,34 @@ const buildChangedFieldPayload = (before, after, keys = []) => {
   };
 };
 
+const getPendingInviteRecord = (project, { invitationId = null, userId = null, email = '' } = {}) => {
+  const invites = Array.isArray(project?.pendingInvites) ? project.pendingInvites : [];
+
+  if (invitationId) {
+    return invites.find((invite) => toObjectIdString(invite?._id) === toObjectIdString(invitationId)) || null;
+  }
+
+  if (userId) {
+    const normalizedUserId = toObjectIdString(userId);
+    return invites.find((invite) => toObjectIdString(invite?.user) === normalizedUserId) || null;
+  }
+
+  if (email) {
+    const normalizedEmail = normalizeEmail(email);
+    return invites.find((invite) => normalizeEmail(invite?.email) === normalizedEmail) || null;
+  }
+
+  return null;
+};
+
 const populateProjectRelations = async (project, { detail = false } = {}) => {
   await project.populate('owner', 'firstName lastName email avatar');
   await project.populate({
     path: 'members.user',
+    select: 'firstName lastName email avatar',
+  });
+  await project.populate({
+    path: 'pendingInvites.user pendingInvites.invitedBy',
     select: 'firstName lastName email avatar',
   });
 
@@ -618,8 +654,9 @@ exports.inviteMember = async (req, res) => {
     }
 
     const actorName = getDisplayName(req.user);
-    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    const normalizedEmail = normalizeEmail(email);
     let invitedUser = null;
+    const normalizedRole = ['Owner', 'ProjectManager', 'Member'].includes(role) ? role : 'Member';
 
     if (userId) {
       invitedUser = await User.findById(userId).select('firstName lastName email');
@@ -642,35 +679,54 @@ exports.inviteMember = async (req, res) => {
       });
     }
 
-    project.members.push({
+    const existingInvite =
+      getPendingInviteRecord(project, { userId: invitedUser._id }) ||
+      getPendingInviteRecord(project, { email: invitedUser.email });
+
+    if (existingInvite) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invitation is already pending',
+      });
+    }
+
+    project.pendingInvites.push({
       user: invitedUser._id,
-      role,
+      email: invitedUser.email,
+      role: normalizedRole,
+      invitedBy: req.user._id,
     });
     await project.save();
+
+    const pendingInvite = project.pendingInvites[project.pendingInvites.length - 1];
 
     await createNotification({
       user: invitedUser._id,
       type: 'ProjectInvite',
       title: 'Project invitation',
-      message: `You were invited to “${project.title}”.`,
+      message: `${actorName} invited you to join “${project.title}”.`,
       entityType: 'Project',
       entityId: project._id,
-      metadata: { projectId: project._id.toString(), role },
+      metadata: {
+        projectId: project._id.toString(),
+        invitationId: toObjectIdString(pendingInvite?._id),
+        role: normalizedRole,
+        invitationStatus: 'pending',
+        invitedById: toObjectIdString(req.user._id),
+        invitedByName: actorName,
+        projectTitle: project.title,
+      },
     });
 
     await recordActivitySafely({
       projectId: project._id,
       userId: req.user._id,
-      actionType: 'member_added',
+      actionType: 'invited',
       entityType: 'project',
       entityId: invitedUser._id,
       title: invitedUser.email,
-      description: `added ${getDisplayName(invitedUser)} to project “${project.title}”`,
-      newValue: {
-        memberId: invitedUser._id.toString(),
-        memberName: getDisplayName(invitedUser),
-        role,
-      },
+      description: `invited ${getDisplayName(invitedUser)} to join project “${project.title}”`,
+      newValue: snapshotPendingInviteForActivity(pendingInvite, invitedUser),
       projectTitle: project.title,
       userName: actorName,
       entityTitle: getDisplayName(invitedUser),
@@ -678,7 +734,8 @@ exports.inviteMember = async (req, res) => {
         projectTitle: project.title,
         userName: actorName,
         entityTitle: getDisplayName(invitedUser),
-        role,
+        role: normalizedRole,
+        invitationId: toObjectIdString(pendingInvite?._id),
       },
     });
 
@@ -687,7 +744,221 @@ exports.inviteMember = async (req, res) => {
     return res.status(200).json({
       success: true,
       data: payload,
-      message: 'Member invited successfully',
+      message: 'Invitation sent. Waiting for teammate to accept.',
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.acceptInvite = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found',
+      });
+    }
+
+    const invitation = getPendingInviteRecord(project, { invitationId: req.params.invitationId });
+    if (!invitation) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invitation not found or already handled',
+      });
+    }
+
+    const canRespondToInvite =
+      toObjectIdString(invitation.user) === toObjectIdString(req.user._id) ||
+      normalizeEmail(invitation.email) === normalizeEmail(req.user.email);
+
+    if (!canRespondToInvite) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only respond to your own invitation',
+      });
+    }
+
+    const actorName = getDisplayName(req.user);
+    const invitedById = toObjectIdString(invitation.invitedBy);
+
+    if (!isProjectMember(project, req.user._id)) {
+      project.members.push({
+        user: req.user._id,
+        role: invitation.role || 'Member',
+      });
+    }
+
+    const inviteSnapshot = snapshotPendingInviteForActivity(invitation, req.user);
+    invitation.deleteOne();
+    await project.save();
+
+    await Notification.updateMany(
+      {
+        user: req.user._id,
+        type: 'ProjectInvite',
+        entityId: project._id,
+        'metadata.invitationId': toObjectIdString(req.params.invitationId),
+      },
+      {
+        $set: {
+          read: true,
+          'metadata.invitationStatus': 'accepted',
+        },
+      }
+    );
+
+    if (invitedById && invitedById !== toObjectIdString(req.user._id)) {
+      await createNotification({
+        user: invitedById,
+        type: 'Info',
+        title: 'Invitation accepted',
+        message: `${actorName} accepted your invitation to “${project.title}”.`,
+        entityType: 'Project',
+        entityId: project._id,
+        metadata: {
+          projectId: toObjectIdString(project._id),
+          memberId: toObjectIdString(req.user._id),
+          memberName: actorName,
+        },
+      });
+    }
+
+    await recordActivitySafely({
+      projectId: project._id,
+      userId: req.user._id,
+      actionType: 'member_added',
+      entityType: 'project',
+      entityId: req.user._id,
+      title: req.user.email || actorName,
+      description: `${actorName} accepted the invitation to join project “${project.title}”`,
+      oldValue: inviteSnapshot,
+      newValue: {
+        memberId: toObjectIdString(req.user._id),
+        memberName: actorName,
+        role: invitation.role || 'Member',
+      },
+      projectTitle: project.title,
+      userName: actorName,
+      entityTitle: actorName,
+      metadata: {
+        projectTitle: project.title,
+        userName: actorName,
+        entityTitle: actorName,
+        role: invitation.role || 'Member',
+      },
+    });
+
+    const payload = await buildProjectPayload(project, { detail: true });
+
+    return res.status(200).json({
+      success: true,
+      data: payload,
+      message: `You joined “${project.title}”.`,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.declineInvite = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found',
+      });
+    }
+
+    const invitation = getPendingInviteRecord(project, { invitationId: req.params.invitationId });
+    if (!invitation) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invitation not found or already handled',
+      });
+    }
+
+    const canRespondToInvite =
+      toObjectIdString(invitation.user) === toObjectIdString(req.user._id) ||
+      normalizeEmail(invitation.email) === normalizeEmail(req.user.email);
+
+    if (!canRespondToInvite) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only respond to your own invitation',
+      });
+    }
+
+    const actorName = getDisplayName(req.user);
+    const invitedById = toObjectIdString(invitation.invitedBy);
+    const inviteSnapshot = snapshotPendingInviteForActivity(invitation, req.user);
+
+    invitation.deleteOne();
+    await project.save();
+
+    await Notification.updateMany(
+      {
+        user: req.user._id,
+        type: 'ProjectInvite',
+        entityId: project._id,
+        'metadata.invitationId': toObjectIdString(req.params.invitationId),
+      },
+      {
+        $set: {
+          read: true,
+          'metadata.invitationStatus': 'declined',
+        },
+      }
+    );
+
+    if (invitedById && invitedById !== toObjectIdString(req.user._id)) {
+      await createNotification({
+        user: invitedById,
+        type: 'Info',
+        title: 'Invitation declined',
+        message: `${actorName} declined your invitation to “${project.title}”.`,
+        entityType: 'Project',
+        entityId: project._id,
+        metadata: {
+          projectId: toObjectIdString(project._id),
+          memberId: toObjectIdString(req.user._id),
+          memberName: actorName,
+        },
+      });
+    }
+
+    await recordActivitySafely({
+      projectId: project._id,
+      userId: req.user._id,
+      actionType: 'declined',
+      entityType: 'project',
+      entityId: req.user._id,
+      title: req.user.email || actorName,
+      description: `${actorName} declined the invitation to join project “${project.title}”`,
+      oldValue: inviteSnapshot,
+      projectTitle: project.title,
+      userName: actorName,
+      entityTitle: actorName,
+      metadata: {
+        projectTitle: project.title,
+        userName: actorName,
+        entityTitle: actorName,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Invitation to “${project.title}” declined.`,
     });
   } catch (error) {
     return res.status(500).json({

@@ -7,6 +7,8 @@ const {
   updateProject,
   deleteProject,
   inviteMember,
+  acceptInvite,
+  declineInvite,
   removeMember,
   addMeeting,
   updateMeeting,
@@ -46,6 +48,12 @@ router.delete('/:id', deleteProject);
 
 // POST   /api/projects/:id/invite - Invite member to project (owner only)
 router.post('/:id/invite', inviteMember);
+
+// POST   /api/projects/:id/invitations/:invitationId/accept - Accept a project invitation
+router.post('/:id/invitations/:invitationId/accept', acceptInvite);
+
+// POST   /api/projects/:id/invitations/:invitationId/decline - Decline a project invitation
+router.post('/:id/invitations/:invitationId/decline', declineInvite);
 
 // DELETE /api/projects/:id/members/:memberId - Remove member (owner only)
 router.delete('/:id/members/:memberId', removeMember);

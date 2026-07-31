@@ -9,6 +9,7 @@ const NotificationsPanel = () => {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [markingAll, setMarkingAll] = useState(false);
+  const [inviteActionId, setInviteActionId] = useState('');
 
   useEffect(() => {
     fetchNotifications();
@@ -78,6 +79,74 @@ const NotificationsPanel = () => {
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
+  const isPendingProjectInvite = (notification) =>
+    ['ProjectInvite', 'project_invite'].includes(notification?.type) &&
+    notification?.metadata?.projectId &&
+    notification?.metadata?.invitationId &&
+    notification?.metadata?.invitationStatus === 'pending';
+
+  const updateInviteNotificationState = (notificationId, nextStatus, nextMessage) => {
+    setNotifications((prev) =>
+      prev.map((note) => {
+        const currentId = note.id || note._id;
+        if (currentId !== notificationId) return note;
+
+        return {
+          ...note,
+          read: true,
+          title: nextStatus === 'accepted' ? 'Invitation accepted' : 'Invitation declined',
+          message: nextMessage || note.message,
+          metadata: {
+            ...note.metadata,
+            invitationStatus: nextStatus,
+          },
+        };
+      })
+    );
+  };
+
+  const handleInviteResponse = async (notification, responseType) => {
+    const notificationId = notification?.id || notification?._id;
+    const projectId = notification?.metadata?.projectId;
+    const invitationId = notification?.metadata?.invitationId;
+
+    if (!notificationId || !projectId || !invitationId) {
+      toast.error('Invitation details are missing.');
+      return;
+    }
+
+    const endpoint =
+      responseType === 'accept'
+        ? `/projects/${projectId}/invitations/${invitationId}/accept`
+        : `/projects/${projectId}/invitations/${invitationId}/decline`;
+
+    try {
+      setInviteActionId(notificationId);
+      const { data } = await api.post(endpoint);
+      updateInviteNotificationState(
+        notificationId,
+        responseType === 'accept' ? 'accepted' : 'declined',
+        data?.message
+      );
+      toast.success(
+        data?.message ||
+          (responseType === 'accept'
+            ? 'Invitation accepted successfully'
+            : 'Invitation declined')
+      );
+    } catch (error) {
+      console.error(`Failed to ${responseType} invitation:`, error);
+      toast.error(
+        error?.response?.data?.message ||
+          error?.response?.data?.error ||
+          `Failed to ${responseType} invitation`
+      );
+      fetchNotifications();
+    } finally {
+      setInviteActionId('');
+    }
+  };
+
   const getNotificationIcon = (type) => {
     switch (type) {
       case 'TaskAssigned':
@@ -133,6 +202,8 @@ const NotificationsPanel = () => {
   const NotificationItem = ({ notification }) => {
     const IconComponent = getNotificationIcon(notification.type);
     const color = getNotificationColor(notification.type);
+    const pendingInvite = isPendingProjectInvite(notification);
+    const actionBusy = inviteActionId === (notification.id || notification._id);
     const colorMap = {
       violet: 'text-violet-600',
       orange: 'text-orange-600',
@@ -159,6 +230,25 @@ const NotificationsPanel = () => {
               <p className="text-sm text-gray-600 line-clamp-2 mt-1">
                 {notification.message || notification.text}
               </p>
+              {pendingInvite ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => handleInviteResponse(notification, 'accept')}
+                    disabled={actionBusy}
+                    className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    {actionBusy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                    Accept
+                  </button>
+                  <button
+                    onClick={() => handleInviteResponse(notification, 'decline')}
+                    disabled={actionBusy}
+                    className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Decline
+                  </button>
+                </div>
+              ) : null}
             </div>
             {!notification.read && <span className="w-2 h-2 bg-violet-500 rounded-full mt-2 transition-all duration-200" />}
           </div>
@@ -167,7 +257,7 @@ const NotificationsPanel = () => {
           </p>
         </div>
         <div className="flex-shrink-0 flex items-center gap-1">
-          {!notification.read && (
+          {!notification.read && !pendingInvite && (
             <button
               onClick={() => handleMarkOneRead(notification.id || notification._id)}
               className="flex-shrink-0 p-2 text-violet-600 hover:bg-violet-100 rounded-md transition-colors"
