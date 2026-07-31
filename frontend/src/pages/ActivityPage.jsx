@@ -274,7 +274,7 @@ export default function ActivityPage() {
   return (
     <WorkspaceLayout
       activeNav="activity"
-      title="Activity Log"
+      title="Activity"
       subtitle="Track project, task, message, meeting, and shared-resource changes across SmartCollab."
       user={user}
       onLogout={handleLogout}
