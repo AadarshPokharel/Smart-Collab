@@ -854,7 +854,7 @@ export default function TasksPage() {
       setSubmissionTask(null);
       setSubmissionFile(null);
       setSubmissionNote('');
-      toast.success(response?.data?.message || 'Task work uploaded successfully');
+      toast.success(response?.data?.message || 'Task submitted successfully');
     } catch (requestError) {
       toast.error(getErrorMessage(requestError, 'Unable to upload task work.'));
     } finally {
@@ -1196,6 +1196,7 @@ export default function TasksPage() {
                     const canManageThisTask = isProjectManager(relatedProject, user);
                     const canChangeThisTaskStatus = canUpdateTaskStatus(task, relatedProject, user);
                     const canUploadThisTaskSubmission = canUploadTaskSubmission(task, relatedProject, user);
+                    const canSelfSubmitTask = canChangeThisTaskStatus && !canManageThisTask;
                     const showSubmissionUploader = canSeeSubmissionUploader(task, relatedProject, user);
                     const taskHasSubmission = hasTaskSubmission(task);
                     const isStatusUpdating = updatingStatusId === task.id;
@@ -1260,7 +1261,7 @@ export default function TasksPage() {
                                   </div>
                                 ) : (
                                   <p className="mt-3 text-sm text-amber-700">
-                                    This task cannot be marked done until the required work file is uploaded.
+                                    Upload the required work file to submit this task.
                                   </p>
                                 )}
                               </div>
@@ -1286,8 +1287,12 @@ export default function TasksPage() {
                                 {taskHasSubmission && !canUploadThisTaskSubmission
                                   ? 'Download Work'
                                   : taskHasSubmission
-                                    ? 'Replace Work'
-                                    : 'Upload Work'}
+                                    ? canManageThisTask
+                                      ? 'Replace Work'
+                                      : 'Replace Submission'
+                                    : canManageThisTask
+                                      ? 'Upload Work'
+                                      : 'Submit Work'}
                               </button>
                             )}
                             {taskHasSubmission && canUploadThisTaskSubmission && (
@@ -1353,38 +1358,59 @@ export default function TasksPage() {
                           </div>
                         </div>
 
-                        <div className="mt-5 flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4 lg:flex-row lg:items-center lg:justify-between">
-                          <div>
-                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                              Quick status update
-                            </p>
-                            <p className="mt-1 text-sm text-slate-500">
-                              Owners, admins, managers, and assigned members can change status.
-                              {task.submissionRequired ? ' Required work must be uploaded before Done.' : ''}
-                            </p>
-                          </div>
+                        {(canManageThisTask || canSelfSubmitTask) && (
+                          <div className="mt-5 flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4 lg:flex-row lg:items-center lg:justify-between">
+                            <div>
+                              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                {canManageThisTask ? 'Task status' : 'Task submission'}
+                              </p>
+                              <p className="mt-1 text-sm text-slate-500">
+                                {canManageThisTask
+                                  ? `Owners, admins, and project managers can manage task status.${task.submissionRequired ? ' Required work must be uploaded before Done.' : ''}`
+                                  : task.status === 'Done'
+                                    ? 'This task has already been submitted.'
+                                    : task.submissionRequired
+                                      ? 'Upload the required work above to submit this task.'
+                                      : 'Submit this task when your work is complete.'}
+                              </p>
+                            </div>
 
-                          <div className="flex items-center gap-3">
-                            {isStatusUpdating && (
-                              <span className="inline-flex items-center gap-2 text-sm text-slate-500">
-                                <Loader2 size={16} className="animate-spin" />
-                                Saving
-                              </span>
-                            )}
-                            <select
-                              value={task.status}
-                              onChange={(event) => handleStatusChange(task, event.target.value)}
-                              disabled={!canChangeThisTaskStatus || isStatusUpdating}
-                              className="min-w-[180px] rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-                            >
-                              {TASK_STATUSES.map((status) => (
-                                <option key={status} value={status}>
-                                  {status}
-                                </option>
-                              ))}
-                            </select>
+                            <div className="flex items-center gap-3">
+                              {isStatusUpdating && (
+                                <span className="inline-flex items-center gap-2 text-sm text-slate-500">
+                                  <Loader2 size={16} className="animate-spin" />
+                                  Saving
+                                </span>
+                              )}
+                              {canManageThisTask ? (
+                                <select
+                                  value={task.status}
+                                  onChange={(event) => handleStatusChange(task, event.target.value)}
+                                  disabled={!canChangeThisTaskStatus || isStatusUpdating}
+                                  className="min-w-[180px] rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                                >
+                                  {TASK_STATUSES.map((status) => (
+                                    <option key={status} value={status}>
+                                      {status}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : task.status === 'Done' ? (
+                                <Badge tone="success">Submitted</Badge>
+                              ) : !task.submissionRequired ? (
+                                <button
+                                  onClick={() => handleStatusChange(task, 'Done')}
+                                  disabled={isStatusUpdating}
+                                  className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                                >
+                                  Submit Task
+                                </button>
+                              ) : (
+                                <Badge tone="medium">Waiting for submission</Badge>
+                              )}
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </article>
                     );
                   })}
@@ -1687,10 +1713,10 @@ export default function TasksPage() {
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-violet-600">
-                  Task work upload
+                  Task submission
                 </p>
                 <h2 className="mt-1 text-2xl font-semibold text-slate-900">
-                  Upload work for {submissionTask.title}
+                  Submit work for {submissionTask.title}
                 </h2>
                 <p className="mt-2 text-sm text-slate-500">
                   Accepted formats: {formatAllowedSubmissionFormats(submissionTask.allowedSubmissionFormats)}
@@ -1756,7 +1782,7 @@ export default function TasksPage() {
                   className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   {uploadingSubmissionId && <Loader2 size={16} className="animate-spin" />}
-                  Upload Work
+                  Submit Task
                 </button>
               </div>
             </form>

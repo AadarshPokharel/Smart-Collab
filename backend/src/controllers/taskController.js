@@ -1337,6 +1337,7 @@ exports.uploadTaskSubmission = async (req, res) => {
 
     await populateTaskRelations(task);
     const previousSubmission = serializeSubmission(task.submission);
+    const previousStatus = normalizeTaskStatus(task.status);
 
     task.submission = {
       fileName: normalizedFileName,
@@ -1348,49 +1349,91 @@ exports.uploadTaskSubmission = async (req, res) => {
       uploadedAt: new Date(),
       uploadedBy: req.user._id,
     };
+    task.status = 'Done';
+    task.completedAt = task.completedAt || new Date();
 
     await task.save();
     await populateTaskRelations(task);
+    normalizePersistedTaskStatus(task);
 
     const actorName = getDisplayName(req.user);
     await sendTaskNotification({
       recipientId: task.assignedBy,
       actorId: req.user._id,
       type: 'Info',
-      title: 'Task work uploaded',
-      message: `${actorName} uploaded work for “${task.title}”.`,
+      title: previousStatus === 'Done' ? 'Task submission updated' : 'Task submitted',
+      message:
+        previousStatus === 'Done'
+          ? `${actorName} updated the submitted work for “${task.title}”.`
+          : `${actorName} submitted work for “${task.title}”.`,
       entityType: 'Task',
       entityId: task._id,
       metadata: { projectId: toObjectIdString(task.project) },
     });
 
-    await recordActivitySafely({
-      projectId: task.project?._id || task.project,
-      userId: req.user._id,
-      actionType: 'submitted',
-      entityType: 'task',
-      entityId: task._id,
-      title: task.title,
-      description: `${actorName} uploaded task work for “${task.title}”`,
-      oldValue: previousSubmission,
-      newValue: serializeSubmission(task.submission),
-      projectTitle: getProjectTitle(task.project),
-      userName: actorName,
-      entityTitle: task.title,
-      metadata: buildTaskActivityMetadata({
-        task,
+    const activityEntries = [
+      {
+        projectId: task.project?._id || task.project,
+        userId: req.user._id,
+        actionType: 'submitted',
+        entityType: 'task',
+        entityId: task._id,
+        title: task.title,
+        description:
+          previousStatus === 'Done'
+            ? `${actorName} updated the submitted work for “${task.title}”`
+            : `${actorName} submitted task work for “${task.title}”`,
+        oldValue: previousSubmission,
+        newValue: serializeSubmission(task.submission),
         projectTitle: getProjectTitle(task.project),
-        actorName,
-        extra: {
-          submissionFileName: task.submission.fileName,
-        },
-      }),
-    });
+        userName: actorName,
+        entityTitle: task.title,
+        metadata: buildTaskActivityMetadata({
+          task,
+          projectTitle: getProjectTitle(task.project),
+          actorName,
+          extra: {
+            submissionFileName: task.submission.fileName,
+          },
+        }),
+      },
+    ];
+
+    if (previousStatus !== 'Done') {
+      activityEntries.push({
+        projectId: task.project?._id || task.project,
+        userId: req.user._id,
+        actionType: 'completed',
+        entityType: 'task',
+        entityId: task._id,
+        title: task.title,
+        description: `${actorName} completed task “${task.title}” by submitting work`,
+        oldValue: { status: previousStatus },
+        newValue: { status: 'Done' },
+        projectTitle: getProjectTitle(task.project),
+        userName: actorName,
+        entityTitle: task.title,
+        metadata: buildTaskActivityMetadata({
+          task,
+          projectTitle: getProjectTitle(task.project),
+          actorName,
+          extra: {
+            fromStatus: previousStatus,
+            toStatus: 'Done',
+          },
+        }),
+      });
+    }
+
+    await recordActivitiesSafely(activityEntries);
 
     return res.status(200).json({
       success: true,
       task: serializeTaskForUser(task, project, req.user),
-      message: 'Task work uploaded successfully',
+      message:
+        previousStatus === 'Done'
+          ? 'Task submission updated successfully'
+          : 'Task submitted successfully',
     });
   } catch (error) {
     return res.status(500).json({

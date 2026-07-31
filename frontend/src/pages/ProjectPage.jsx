@@ -629,7 +629,7 @@ export default function ProjectPage() {
       setSubmissionTask(null);
       setSubmissionFile(null);
       setSubmissionNote('');
-      toast.success(response.data?.message || 'Task work uploaded successfully');
+      toast.success(response.data?.message || 'Task submitted successfully');
       loadNotifications().catch(() => {});
     } catch (error) {
       toast.error(
@@ -1445,6 +1445,7 @@ export default function ProjectPage() {
                         const canChangeStatus =
                           canManageTasks || task?.assignedTo?._id === user?._id;
                         const canUploadSubmission = canUploadTaskWork(task, canManageTasks, user);
+                        const canSelfSubmitTask = canChangeStatus && !canManageTasks;
                         const showSubmissionUploader = canSeeTaskSubmissionUploader(task, canManageTasks, user);
                         const taskHasSubmission = hasTaskSubmission(task);
                         const isUploadingThisTask = uploadingSubmissionId === (task._id || task.id);
@@ -1488,7 +1489,7 @@ export default function ProjectPage() {
                                   </div>
                                 ) : (
                                   <p className="mt-2 text-xs text-amber-700">
-                                    This task cannot move to Done until work is uploaded.
+                                    Upload the required work file to submit this task.
                                   </p>
                                 )}
                               </div>
@@ -1509,7 +1510,15 @@ export default function ProjectPage() {
                                   ) : (
                                     <Upload size={14} className="inline mr-1" />
                                   )}
-                                  {taskHasSubmission && !canUploadSubmission ? 'Download Work' : taskHasSubmission ? 'Replace Work' : 'Upload Work'}
+                                  {taskHasSubmission && !canUploadSubmission
+                                    ? 'Download Work'
+                                    : taskHasSubmission
+                                      ? canManageTasks
+                                        ? 'Replace Work'
+                                        : 'Replace Submission'
+                                      : canManageTasks
+                                        ? 'Upload Work'
+                                        : 'Submit Work'}
                                 </button>
                               )}
                               {taskHasSubmission && canUploadSubmission ? (
@@ -1526,15 +1535,33 @@ export default function ProjectPage() {
                                   {isDownloadingThisTask ? 'Downloading...' : 'Download Work'}
                                 </button>
                               ) : null}
-                              <select
-                                value={task.status}
-                                onChange={(event) => handleUpdateTaskStatus(task, event.target.value)}
-                                disabled={!canChangeStatus || taskActionId === task._id}
-                                className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-200 disabled:bg-slate-100"
-                              >
-                                <option>To Do</option>
-                                <option>Done</option>
-                              </select>
+                              {canManageTasks ? (
+                                <select
+                                  value={task.status}
+                                  onChange={(event) => handleUpdateTaskStatus(task, event.target.value)}
+                                  disabled={!canChangeStatus || taskActionId === task._id}
+                                  className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-200 disabled:bg-slate-100"
+                                >
+                                  <option>To Do</option>
+                                  <option>Done</option>
+                                </select>
+                              ) : task.status === 'Done' ? (
+                                <span className="inline-flex rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+                                  Submitted
+                                </span>
+                              ) : canSelfSubmitTask && !task.submissionRequired ? (
+                                <button
+                                  onClick={() => handleUpdateTaskStatus(task, 'Done')}
+                                  disabled={taskActionId === task._id}
+                                  className="rounded-xl bg-violet-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                                >
+                                  Submit Task
+                                </button>
+                              ) : canSelfSubmitTask ? (
+                                <span className="inline-flex rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
+                                  Waiting for submission
+                                </span>
+                              ) : null}
                               {canManageTasks && (
                                 <button
                                   onClick={() => handleDeleteTask(task)}
@@ -2086,10 +2113,10 @@ export default function ProjectPage() {
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-violet-600">
-                  Task work upload
+                  Task submission
                 </p>
                 <h2 className="mt-1 text-2xl font-semibold text-slate-900">
-                  Upload work for {submissionTask.title}
+                  Submit work for {submissionTask.title}
                 </h2>
                 <p className="mt-2 text-sm text-slate-500">
                   Accepted formats: {formatAllowedSubmissionFormats(submissionTask.allowedSubmissionFormats)}
@@ -2153,7 +2180,7 @@ export default function ProjectPage() {
                   className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   {uploadingSubmissionId && <Loader2 size={16} className="animate-spin" />}
-                  Upload Work
+                  Submit Task
                 </button>
               </div>
             </form>
