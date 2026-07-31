@@ -1,12 +1,6 @@
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  CalendarRange,
-  Filter,
-  History,
-  RefreshCcw,
-  Users,
-} from 'lucide-react';
+import { RefreshCcw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import WorkspaceLayout from '../components/WorkspaceLayout';
 import ActivityList from '../components/ActivityList';
@@ -260,17 +254,6 @@ export default function ActivityPage() {
     ]);
   };
 
-  const totalByEntity = useMemo(() => {
-    return activities.reduce(
-      (summary, activity) => {
-        const key = activity?.entityType || 'other';
-        summary[key] = (summary[key] || 0) + 1;
-        return summary;
-      },
-      { all: activities.length }
-    );
-  }, [activities]);
-
   return (
     <WorkspaceLayout
       activeNav="activity"
@@ -297,54 +280,6 @@ export default function ActivityPage() {
         </button>
       }
     >
-      <section className="grid gap-4 lg:grid-cols-4">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold text-slate-600">Visible Activities</p>
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-50 text-violet-600">
-              <History size={16} />
-            </div>
-          </div>
-          <p className="mt-4 text-2xl font-semibold text-slate-900">{total}</p>
-          <p className="mt-1 text-xs text-slate-500">Newest actions first</p>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold text-slate-600">Task Activity</p>
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
-              <Filter size={16} />
-            </div>
-          </div>
-          <p className="mt-4 text-2xl font-semibold text-slate-900">{totalByEntity.task || 0}</p>
-          <p className="mt-1 text-xs text-slate-500">Assignments, status, and completion</p>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold text-slate-600">Messages & Meetings</p>
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-50 text-sky-600">
-              <CalendarRange size={16} />
-            </div>
-          </div>
-          <p className="mt-4 text-2xl font-semibold text-slate-900">
-            {(totalByEntity.message || 0) + (totalByEntity.meeting || 0)}
-          </p>
-          <p className="mt-1 text-xs text-slate-500">Conversation and schedule changes</p>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold text-slate-600">Team Members</p>
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-              <Users size={16} />
-            </div>
-          </div>
-          <p className="mt-4 text-2xl font-semibold text-slate-900">{activityUsers.length}</p>
-          <p className="mt-1 text-xs text-slate-500">Members across your accessible projects</p>
-        </div>
-      </section>
-
       <section className="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
