@@ -873,7 +873,7 @@ export default function TasksPage() {
             <SidebarItem icon={FolderKanban} label="Projects" onClick={() => navigate('/projects')} />
             <SidebarItem icon={CheckSquare} label="Tasks" active onClick={() => navigate('/tasks')} />
             <SidebarItem icon={MessageSquare} label="Messages" onClick={() => navigate('/messages')} />
-            <SidebarItem icon={History} label="Activity" onClick={() => navigate('/activity')} />
+            <SidebarItem icon={History} label="Activity Log" onClick={() => navigate('/activity')} />
             <SidebarItem icon={Settings} label="Settings" onClick={() => navigate('/settings')} />
           </nav>
         </aside>

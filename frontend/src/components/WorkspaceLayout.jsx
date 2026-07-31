@@ -47,7 +47,7 @@ const NAV_ITEMS = [
   { id: 'projects', label: 'Projects', icon: FolderKanban, path: '/projects' },
   { id: 'tasks', label: 'Tasks', icon: CheckSquare, path: '/tasks' },
   { id: 'messages', label: 'Messages', icon: MessageSquare, path: '/messages' },
-  { id: 'activity', label: 'Activity', icon: History, path: '/activity' },
+  { id: 'activity', label: 'Activity Log', icon: History, path: '/activity' },
   { id: 'settings', label: 'Settings', icon: Settings, path: '/settings' },
 ];
 
